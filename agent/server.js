@@ -4,7 +4,7 @@ const config = require('./config');
 
 // 对话历史
 const conversationHistory = [
-  { role: 'system', content: '你是MiniMax的AI助手。' }
+  { role: 'system', content: '你是Francis的AI助手。' }
 ];
 
 function createClient() {
