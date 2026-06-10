@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(MINIMAX_API_KEY=\"sk-api-K0oYtL7ifkBP3r9ksRWVMZturqG-7RNcoYBUb2vJ44b7KsTuwr7RdlPn5_LRQSiDtWowxjmm5wFNaELLl8YDY7OvDBmT1dsMMv9qocc7CcgDe_OIgc_3oTg\" node *)",
+      "Bash(npm create *)",
+      "Bash(npm install *)",
+      "Bash(npm run *)",
+      "Bash(curl *)"
+    ]
+  }
+}
