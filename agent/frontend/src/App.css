@@ -744,3 +744,33 @@
     display: none; /* 极小屏去掉箭头 */
   }
 }
+
+/* ─── AI Logo 图标 ─── */
+.ai-icon {
+  display: block;
+  transition: transform 0.2s ease;
+}
+
+/* 流式输出时：脉冲发光 + 轻微旋转 */
+.ai-icon.streaming {
+  animation: ai-pulse 1.5s ease-in-out infinite;
+  filter: drop-shadow(0 0 4px var(--accent-glow));
+}
+
+@keyframes ai-pulse {
+  0%, 100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1.08);
+    opacity: 0.85;
+  }
+}
+
+/* 暗色模式下增强发光 */
+@media (prefers-color-scheme: dark) {
+  .ai-icon.streaming {
+    filter: drop-shadow(0 0 6px rgba(129, 140, 248, 0.4));
+  }
+}

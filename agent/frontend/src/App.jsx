@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
-import './App.css'
+import AIIcon from './AIIcon'import './App.css'
 const API = 'http://localhost:3001'
 
 function renderMarkdown(text) {
@@ -98,7 +98,7 @@ function App() {
       </aside>
       <main className="chat-main">
         <header className="chat-header">
-          <div className="header-left"><button className="toggle-sidebar" onClick={() => setSidebarOpen(!sidebarOpen)}><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg></button><div className="logo-icon">✦</div><h1>AI Chat</h1></div>
+          <div className="header-left"><button className="toggle-sidebar" onClick={() => setSidebarOpen(!sidebarOpen)}><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg></button><div className="logo-icon"><AIIcon size={16} /></div><h1>AI Chat</h1></div>
           <div className="header-right">
             <div className="mode-toggle"><button className={`mode-btn${agentMode === 'chat' ? ' active' : ''}`} onClick={() => setAgentMode('chat')}>对话</button><button className={`mode-btn${agentMode === 'agent' ? ' active' : ''}`} onClick={() => setAgentMode('agent')}>Agent</button></div>
             <div className="model-selector"><select value={selectedModel} onChange={e => handleModelChange(e.target.value)} className="model-select" title="选择模型">{modelList.map(m => (<option key={m.id} value={m.id}>{m.name}</option>))}</select><span className="model-badge">{mn}</span></div>
@@ -108,7 +108,7 @@ function App() {
         <div className="messages">
           {messages.map((msg, i) => (
             <div key={i} className={`message ${msg.role}${msg.streaming ? ' streaming' : ''}`}>
-              <div className="message-avatar">{msg.role === 'user' ? <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M12 12c2.7 0 5-2.3 5-5s-2.3-5-5-5-5 2.3-5 5 2.3 5 5 5zm0 2c-3.3 0-10 1.7-10 5v2h20v-2c0-3.3-6.7-5-10-5z"/></svg> : <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2a10 10 0 100 20 10 10 0 000-20zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg>}</div>
+              <div className="message-avatar">{msg.role === 'user' ? <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M12 12c2.7 0 5-2.3 5-5s-2.3-5-5-5-5 2.3-5 5 2.3 5 5 5zm0 2c-3.3 0-10 1.7-10 5v2h20v-2c0-3.3-6.7-5-10-5z"/></svg> : <AIIcon size={20} streaming={msg.streaming} />}</div>
               <div className="message-body">
                 {msg.role === 'assistant' && msg.streaming && !msg.content && !msg.steps?.length && <div className="thinking-dots"><span></span><span></span><span></span></div>}
                 {renderSteps(msg.steps)}
