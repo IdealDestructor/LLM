@@ -33,7 +33,7 @@ function App() {
   const [messages, setMessages] = useState([])
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
-  const [sidebarOpen, setSidebarOpen] = useState(true)
+  const isMobile = typeof window !== 'undefined' && window.innerWidth <= 768; const [sidebarOpen, setSidebarOpen] = useState(!isMobile)
   const [modelList, setModelList] = useState([])
   const [selectedModel, setSelectedModel] = useState('')
   const [selectedMaxTokens, setSelectedMaxTokens] = useState(4096)
@@ -91,9 +91,10 @@ function App() {
 
   return (
     <div className="chat-app">
+      {sidebarOpen && <div className="sidebar-overlay" onClick={() => setSidebarOpen(false)} />}
       <aside className={`sidebar${sidebarOpen ? ' open' : ''}`}>
         <div className="sidebar-header"><button className="new-chat-btn" onClick={createNewSession}><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>新对话</button></div>
-        <div className="session-list">{sessionList.map(s => (<div key={s.id} className={`session-item${s.id === activeSessionId ? ' active' : ''}`} onClick={() => switchToSession(s.id)}><div className="session-info"><span className="session-title">{s.title}</span><span className="session-time">{fmt(s.createdAt)}</span></div><button className="session-delete" onClick={(e) => deleteSession(s.id, e)} title="删除"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></div>))}</div>
+        <div className="session-list">{sessionList.map(s => (<div key={s.id} className={`session-item${s.id === activeSessionId ? ' active' : ''}`} onClick={() => { switchToSession(s.id); if (isMobile) setSidebarOpen(false); }}><div className="session-info"><span className="session-title">{s.title}</span><span className="session-time">{fmt(s.createdAt)}</span></div><button className="session-delete" onClick={(e) => deleteSession(s.id, e)} title="删除"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></div>))}</div>
       </aside>
       <main className="chat-main">
         <header className="chat-header">

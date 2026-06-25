@@ -28,6 +28,12 @@
   --radius: 16px;
   --radius-sm: 10px;
 
+  /* 安全区域（iOS 刘海屏 / 底部 home indicator） */
+  --sat: env(safe-area-inset-top, 0px);
+  --sar: env(safe-area-inset-right, 0px);
+  --sab: env(safe-area-inset-bottom, 0px);
+  --sal: env(safe-area-inset-left, 0px);
+
   color-scheme: light dark;
 }
 
@@ -77,6 +83,7 @@ body {
   background: var(--bg);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  -webkit-tap-highlight-color: transparent; /* 移除移动端点击高亮 */
   overflow: hidden;
 }
 
@@ -93,4 +100,22 @@ body {
 }
 ::-webkit-scrollbar-thumb:hover {
   background: var(--text-muted);
+}
+
+/* 移动端触摸优化：防止长按弹出菜单和文字选择（聊天界面不需要） */
+@media (max-width: 768px) {
+  .chat-app {
+    -webkit-user-select: none;
+    user-select: none;
+  }
+  /* 输入框仍需可选择 */
+  textarea, input {
+    -webkit-user-select: auto;
+    user-select: auto;
+  }
+  /* 消息内容可复制 */
+  .message-body {
+    -webkit-user-select: text;
+    user-select: text;
+  }
 }
