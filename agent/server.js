@@ -2,6 +2,8 @@ const http = require('http');
 const OpenAI = require('openai');
 const config = require('./config');
 const sessions = require('./sessions');
+const agent = require('./agent');
+const tools = require('./tools');
 
 function createClient() {
   const cfg = config[config.provider] || config.openai;
@@ -26,6 +28,29 @@ function json(res, data, status = 200) {
   res.end(JSON.stringify(data));
 }
 
+function resolveModelOptions(body) {
+  const model = body.model || config.defaultModel;
+  const modelConfig = config.models.find(m => m.id === model);
+  const modelDefaultMaxTokens = modelConfig?.maxTokens || config.defaultMaxTokens;
+  let maxTokens = body.maxTokens || modelDefaultMaxTokens;
+  maxTokens = Math.max(1, Math.min(16384, parseInt(maxTokens, 10) || modelDefaultMaxTokens));
+  return { model, maxTokens };
+}
+
+// ─── 路由：模型列表 ────────────────────────────────────────
+function handleModels(req, res) {
+  json(res, {
+    models: config.models,
+    defaultModel: config.defaultModel,
+    defaultMaxTokens: config.defaultMaxTokens,
+  });
+}
+
+// ─── 路由：工具列表 ────────────────────────────────────────
+function handleTools(req, res) {
+  json(res, { tools: tools.listTools() });
+}
+
 // ─── 路由：会话管理 ─────────────────────────────────────────
 async function handleSessions(req, res, method) {
   if (method === 'POST') {
@@ -35,12 +60,10 @@ async function handleSessions(req, res, method) {
     json(res, { sessionId: id, meta: sessions.get(id).meta });
     return;
   }
-
   if (method === 'GET') {
     json(res, { sessions: sessions.list() });
     return;
   }
-
   json(res, { error: 'Method not allowed' }, 405);
 }
 
@@ -51,7 +74,6 @@ async function handleSessionById(req, res, method, sessionId) {
     json(res, { meta: session.meta, messages: session.messages.slice(1) });
     return;
   }
-
   if (method === 'PATCH') {
     const body = await readBody(req);
     const { title } = JSON.parse(body);
@@ -61,96 +83,100 @@ async function handleSessionById(req, res, method, sessionId) {
     json(res, { ok: true, meta: sessions.get(sessionId).meta });
     return;
   }
-
   if (method === 'DELETE') {
     const removed = sessions.remove(sessionId);
     if (!removed) return json(res, { error: 'Session not found' }, 404);
     json(res, { ok: true });
     return;
   }
-
   json(res, { error: 'Method not allowed' }, 405);
 }
 
 // ─── 路由：非流式聊天 ──────────────────────────────────────
 async function handleChat(req, res) {
   const body = await readBody(req);
-  const { message, sessionId } = JSON.parse(body);
-
+  const parsed = JSON.parse(body);
+  const { message, sessionId } = parsed;
   if (!sessionId) return json(res, { error: 'sessionId is required' }, 400);
-
   const history = sessions.getMessages(sessionId);
   if (!history) return json(res, { error: 'Session not found' }, 404);
-
+  const { model, maxTokens } = resolveModelOptions(parsed);
   history.push({ role: 'user', content: message });
-
   const client = createClient();
-  const response = await client.chat.completions.create({
-    model: config.defaultModel,
-    messages: history,
-    max_tokens: 500,
-  });
-
+  const response = await client.chat.completions.create({ model, messages: history, max_tokens: maxTokens });
   const reply = response.choices[0].message.content;
   history.push({ role: 'assistant', content: reply });
-
   json(res, { reply });
 }
 
 // ─── 路由：SSE 流式聊天 ────────────────────────────────────
 async function handleStreamChat(req, res) {
-  res.writeHead(200, {
-    'Content-Type': 'text/event-stream',
-    'Cache-Control': 'no-cache',
-    'Connection': 'keep-alive',
-  });
-
+  res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive' });
   try {
     const body = await readBody(req);
-    const { message, sessionId } = JSON.parse(body);
-
-    if (!sessionId) {
-      res.write(`data: ${JSON.stringify({ error: 'sessionId is required' })}\n\n`);
-      res.end();
-      return;
-    }
-
+    const parsed = JSON.parse(body);
+    const { message, sessionId } = parsed;
+    if (!sessionId) { res.write(`data: ${JSON.stringify({ error: 'sessionId is required' })}\n\n`); res.end(); return; }
     const history = sessions.getMessages(sessionId);
-    if (!history) {
-      res.write(`data: ${JSON.stringify({ error: 'Session not found' })}\n\n`);
-      res.end();
-      return;
-    }
-
+    if (!history) { res.write(`data: ${JSON.stringify({ error: 'Session not found' })}\n\n`); res.end(); return; }
+    const { model, maxTokens } = resolveModelOptions(parsed);
     sessions.appendMessage(sessionId, 'user', message);
-
     const client = createClient();
-    const stream = await client.chat.completions.create({
-      model: config.defaultModel,
-      messages: history,
-      max_tokens: 500,
-      stream: true,
-    });
-
+    const stream = await client.chat.completions.create({ model, messages: history, max_tokens: maxTokens, stream: true });
     let fullContent = '';
-
     for await (const chunk of stream) {
       const text = chunk.choices[0]?.delta?.content || '';
-      if (text) {
-        fullContent += text;
-        res.write(`data: ${JSON.stringify({ content: text })}\n\n`);
-      }
+      if (text) { fullContent += text; res.write(`data: ${JSON.stringify({ content: text })}\n\n`); }
     }
-
     sessions.appendMessage(sessionId, 'assistant', fullContent);
-
     res.write('data: [DONE]\n\n');
     res.end();
+  } catch (e) { res.write(`data: ${JSON.stringify({ error: e.message })}\n\n`); res.end(); }
+}
 
-  } catch (e) {
-    res.write(`data: ${JSON.stringify({ error: e.message })}\n\n`);
+// ─── 路由：Agent 模式 SSE 流式聊天 ──────────────────────────
+//
+// POST /api/chat/agent — ReAct 多步推理
+//
+// 与 /api/chat/stream 的区别：
+// - 使用 function calling 让 LLM 自主选择工具
+// - 每个推理步骤（thought/action/observation）通过 SSE 实时推送
+// - 前端可以展示完整的推理过程
+//
+// SSE 事件类型：
+//   thought     — LLM 的思考内容
+//   action      — LLM 调用的工具 + 参数
+//   observation — 工具执行结果
+//   content     — 最终答案的流式 chunk
+//   done        — 推理结束
+//   error       — 错误
+//
+async function handleAgentChat(req, res) {
+  res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive' });
+  try {
+    const body = await readBody(req);
+    const parsed = JSON.parse(body);
+    const { message, sessionId } = parsed;
+    if (!sessionId) { res.write(`data: ${JSON.stringify({ type: 'error', message: 'sessionId is required' })}\n\n`); res.end(); return; }
+    const history = sessions.getMessages(sessionId);
+    if (!history) { res.write(`data: ${JSON.stringify({ type: 'error', message: 'Session not found' })}\n\n`); res.end(); return; }
+    const { model, maxTokens } = resolveModelOptions(parsed);
+    sessions.appendMessage(sessionId, 'user', message);
+    const client = createClient();
+    let fullContent = '';
+
+    const finalAnswer = await agent.runReactStreamFinal({
+      client, model, maxTokens, messages: history,
+      onEvent: (type, data) => {
+        if (type === 'content') fullContent += data.content;
+        res.write(`data: ${JSON.stringify({ type, ...data })}\n\n`);
+      },
+    });
+
+    if (finalAnswer) sessions.appendMessage(sessionId, 'assistant', finalAnswer);
+    res.write('data: [DONE]\n\n');
     res.end();
-  }
+  } catch (e) { res.write(`data: ${JSON.stringify({ type: 'error', message: e.message })}\n\n`); res.end(); }
 }
 
 // ─── URL 解析辅助 ──────────────────────────────────────────
@@ -164,55 +190,41 @@ function handleRequest(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, DELETE, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-
-  if (req.method === 'OPTIONS') {
-    res.writeHead(200);
-    res.end();
-    return;
-  }
+  if (req.method === 'OPTIONS') { res.writeHead(200); res.end(); return; }
 
   const { pathname } = parseUrl(req);
   const method = req.method;
 
-  if (pathname === '/api/sessions') {
-    handleSessions(req, res, method).catch(e => json(res, { error: e.message }, 500));
-    return;
-  }
+  if (method === 'GET' && pathname === '/api/models') { handleModels(req, res); return; }
+  if (method === 'GET' && pathname === '/api/tools') { handleTools(req, res); return; }
+
+  if (pathname === '/api/sessions') { handleSessions(req, res, method).catch(e => json(res, { error: e.message }, 500)); return; }
 
   const sessionMatch = pathname.match(/^\/api\/sessions\/([\w-]+)$/);
-  if (sessionMatch) {
-    handleSessionById(req, res, method, sessionMatch[1]).catch(e => json(res, { error: e.message }, 500));
-    return;
-  }
+  if (sessionMatch) { handleSessionById(req, res, method, sessionMatch[1]).catch(e => json(res, { error: e.message }, 500)); return; }
 
-  if (method === 'POST' && pathname === '/api/chat/stream') {
-    handleStreamChat(req, res);
-    return;
-  }
-
-  if (method === 'POST' && pathname === '/api/chat') {
-    handleChat(req, res).catch(e => json(res, { error: e.message }, 500));
-    return;
-  }
+  if (method === 'POST' && pathname === '/api/chat/stream') { handleStreamChat(req, res); return; }
+  if (method === 'POST' && pathname === '/api/chat/agent') { handleAgentChat(req, res); return; }
+  if (method === 'POST' && pathname === '/api/chat') { handleChat(req, res).catch(e => json(res, { error: e.message }, 500)); return; }
 
   res.writeHead(404);
   res.end('Not Found');
 }
 
 // ─── 启动 ───────────────────────────────────────────────────
-// 先从磁盘恢复持久化的会话数据，再启动 HTTP 服务
 const loadedCount = sessions.loadAll();
-
 const server = http.createServer(handleRequest);
-
 server.listen(3001, () => {
   console.log(`API服务已启动: http://localhost:3001`);
   console.log(`  已恢复 ${loadedCount} 个会话 (data/sessions/)`);
+  console.log('  GET    /api/models             — 获取可选模型列表');
+  console.log('  GET    /api/tools              — 获取可用工具列表');
   console.log('  POST   /api/sessions          — 创建会话');
   console.log('  GET    /api/sessions          — 列出所有会话');
   console.log('  GET    /api/sessions/:id      — 获取会话详情');
   console.log('  PATCH  /api/sessions/:id      — 更新会话标题');
   console.log('  DELETE /api/sessions/:id      — 删除会话');
-  console.log('  POST   /api/chat              — 非流式聊天 (需 sessionId)');
-  console.log('  POST   /api/chat/stream       — SSE 流式聊天 (需 sessionId)');
+  console.log('  POST   /api/chat              — 非流式聊天');
+  console.log('  POST   /api/chat/stream       — SSE 流式聊天');
+  console.log('  POST   /api/chat/agent        — ReAct Agent 多步推理');
 });
