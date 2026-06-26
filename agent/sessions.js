@@ -32,7 +32,8 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 
-const SYSTEM_PROMPT = '你是Francis的AI助手。';
+// 默认 system prompt，可被 settings 中的 systemPrompt 覆盖
+const DEFAULT_SYSTEM_PROMPT = '你是Francis的AI助手。';
 
 // ─── 持久化目录 ──────────────────────────────────────────
 const DATA_DIR = path.resolve(__dirname, 'data', 'sessions');
@@ -116,7 +117,7 @@ function generateId() {
 }
 
 // ─── 创建新会话 ──────────────────────────────────────────
-function create(title) {
+function create(title, systemPrompt) {
   const id = generateId();
   sessions.set(id, {
     meta: {
@@ -125,7 +126,7 @@ function create(title) {
       createdAt: Date.now(),
     },
     messages: [
-      { role: 'system', content: SYSTEM_PROMPT }
+      { role: 'system', content: systemPrompt || DEFAULT_SYSTEM_PROMPT }
     ],
   });
 

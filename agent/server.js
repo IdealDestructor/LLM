@@ -4,6 +4,7 @@ const config = require('./config');
 const sessions = require('./sessions');
 const agent = require('./agent');
 const tools = require('./tools');
+const settings = require('./settings');
 
 function createClient() {
   const cfg = config[config.provider] || config.openai;
@@ -51,12 +52,26 @@ function handleTools(req, res) {
   json(res, { tools: tools.listTools() });
 }
 
+// ─── 路由：用户设置 ────────────────────────────────────────
+// GET  /api/settings — 获取设置
+// PUT  /api/settings — 更新设置（合并写入）
+async function handleSettings(req, res, method) {
+  if (method === "GET") { json(res, settings.get()); return; }
+  if (method === "PUT") {
+    const body = await readBody(req);
+    const updates = body ? JSON.parse(body) : {};
+    json(res, settings.save(updates));
+    return;
+  }
+  json(res, { error: "Method not allowed" }, 405);
+}
+
 // ─── 路由：会话管理 ─────────────────────────────────────────
 async function handleSessions(req, res, method) {
   if (method === 'POST') {
     const body = await readBody(req);
     const { title } = body ? JSON.parse(body) : {};
-    const id = sessions.create(title);
+    const id = sessions.create(title, body ? JSON.parse(body).systemPrompt : undefined);
     json(res, { sessionId: id, meta: sessions.get(id).meta });
     return;
   }
@@ -197,7 +212,7 @@ function handleRequest(req, res) {
 
   if (method === 'GET' && pathname === '/api/models') { handleModels(req, res); return; }
   if (method === 'GET' && pathname === '/api/tools') { handleTools(req, res); return; }
-
+  if (pathname === "/api/settings") { handleSettings(req, res, method).catch(e => json(res, { error: e.message }, 500)); return; }
   if (pathname === '/api/sessions') { handleSessions(req, res, method).catch(e => json(res, { error: e.message }, 500)); return; }
 
   const sessionMatch = pathname.match(/^\/api\/sessions\/([\w-]+)$/);
@@ -212,13 +227,15 @@ function handleRequest(req, res) {
 }
 
 // ─── 启动 ───────────────────────────────────────────────────
-const loadedCount = sessions.loadAll();
+settings.load(); const loadedCount = sessions.loadAll();
 const server = http.createServer(handleRequest);
 server.listen(3001, () => {
   console.log(`API服务已启动: http://localhost:3001`);
   console.log(`  已恢复 ${loadedCount} 个会话 (data/sessions/)`);
   console.log('  GET    /api/models             — 获取可选模型列表');
   console.log('  GET    /api/tools              — 获取可用工具列表');
+  console.log('  GET    /api/settings           — 获取用户设置');
+  console.log('  PUT    /api/settings           — 更新用户设置');
   console.log('  POST   /api/sessions          — 创建会话');
   console.log('  GET    /api/sessions          — 列出所有会话');
   console.log('  GET    /api/sessions/:id      — 获取会话详情');

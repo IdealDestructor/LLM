@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
-import AIIcon from './AIIcon'import './App.css'
+import AIIcon from './AIIcon'
+import './App.css'
 const API = 'http://localhost:3001'
 
 function renderMarkdown(text) {
@@ -41,7 +42,26 @@ function App() {
   const messagesEndRef = useRef(null)
   const textareaRef = useRef(null)
 
+  // ─── 用户设置状态 ────────────────────────────────────────
+  const [theme, setTheme] = useState('auto')
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [systemPrompt, setSystemPrompt] = useState('你是Francis的AI助手。')
+  const [defaultAgentMode, setDefaultAgentMode] = useState('chat')
+
   useEffect(() => { (async () => { try { const [mr, sr] = await Promise.all([fetch(`${API}/api/models`), fetch(`${API}/api/sessions`)]); const md = await mr.json(), sd = await sr.json(); setModelList(md.models); setSelectedModel(md.defaultModel); setSelectedMaxTokens(md.models.find(m => m.id === md.defaultModel)?.maxTokens || md.defaultMaxTokens); setSessionList(sd.sessions); if (sd.sessions.length > 0) await switchToSession(sd.sessions[0].id); else await createNewSession() } catch (e) { console.error(e) } })() }, [])
+
+  // 加载用户设置
+  useEffect(() => { (async () => { try { const r = await fetch(`${API}/api/settings`); const d = await r.json(); if (d.theme) setTheme(d.theme); if (d.systemPrompt) setSystemPrompt(d.systemPrompt); if (d.defaultAgentMode) setDefaultAgentMode(d.defaultAgentMode) } catch (e) { console.error(e) } })() }, [])
+
+  // 应用主题到 <html data-theme="...">
+  useEffect(() => { document.documentElement.setAttribute('data-theme', theme) }, [theme])
+
+  // 主题循环切换：auto → light → dark → auto
+  const cycleTheme = () => { const next = { auto: 'light', light: 'dark', dark: 'auto' }; const nt = next[theme] || 'auto'; setTheme(nt); fetch(`${API}/api/settings`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ theme: nt }) }).catch(() => {}) }
+
+  // 保存设置到后端
+  const saveSettings = async () => { try { await fetch(`${API}/api/settings`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ systemPrompt, defaultAgentMode }) }); setSettingsOpen(false) } catch (e) { console.error(e) } }
+
   const handleModelChange = (id) => { setSelectedModel(id); const mc = modelList.find(m => m.id === id); if (mc) setSelectedMaxTokens(mc.maxTokens) }
   const createNewSession = async () => { try { const r = await fetch(`${API}/api/sessions`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title: '新对话' }) }); const d = await r.json(); setActiveSessionId(d.sessionId); setMessages([{ role: 'assistant', content: '你好！我是 AI 助手，有什么可以帮助你的吗？', streaming: false, steps: [] }]); await refreshSessionList() } catch (e) { console.error(e) } }
   const switchToSession = async (sid) => { if (sid === activeSessionId) return; try { const r = await fetch(`${API}/api/sessions/${sid}`); const d = await r.json(); setActiveSessionId(sid); const l = d.messages.map(m => ({ ...m, streaming: false, steps: [] })); setMessages(l.length === 0 ? [{ role: 'assistant', content: '你好！我是 AI 助手，有什么可以帮助你的吗？', streaming: false, steps: [] }] : l) } catch (e) { console.error(e) } }
@@ -95,6 +115,18 @@ function App() {
       <aside className={`sidebar${sidebarOpen ? ' open' : ''}`}>
         <div className="sidebar-header"><button className="new-chat-btn" onClick={createNewSession}><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>新对话</button></div>
         <div className="session-list">{sessionList.map(s => (<div key={s.id} className={`session-item${s.id === activeSessionId ? ' active' : ''}`} onClick={() => { switchToSession(s.id); if (isMobile) setSidebarOpen(false); }}><div className="session-info"><span className="session-title">{s.title}</span><span className="session-time">{fmt(s.createdAt)}</span></div><button className="session-delete" onClick={(e) => deleteSession(s.id, e)} title="删除"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></div>))}</div>
+        <div className="sidebar-footer">
+          <button className="footer-btn theme-btn" onClick={cycleTheme} title="切换主题">
+            {theme === 'auto' && <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 2a10 10 0 0 0 0 20z" fill="currentColor"/></svg>}
+            {theme === 'light' && <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.2" y1="4.2" x2="5.6" y2="5.6"/><line x1="18.4" y1="18.4" x2="19.8" y2="19.8"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.2" y1="19.8" x2="5.6" y2="18.4"/><line x1="18.4" y1="5.6" x2="19.8" y2="4.2"/></svg>}
+            {theme === 'dark' && <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>}
+            <span>{theme === 'auto' ? '跟随系统' : theme === 'light' ? '亮色' : '暗色'}</span>
+          </button>
+          <button className="footer-btn" onClick={() => setSettingsOpen(true)} title="个人设置">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+            <span>设置</span>
+          </button>
+        </div>
       </aside>
       <main className="chat-main">
         <header className="chat-header">
@@ -121,7 +153,31 @@ function App() {
         </div>
         <div className="input-area"><div className="input-wrapper"><textarea ref={textareaRef} value={input} onChange={e => setInput(e.target.value)} onKeyDown={handleKeyDown} placeholder={agentMode === 'agent' ? 'Agent 模式：输入问题，AI 会自主推理和调用工具…' : '输入消息，Enter 发送，Shift+Enter 换行…'} rows={1} /><button className={`send-btn${input.trim() && !loading ? ' active' : ''}`} onClick={sendMessage} disabled={loading || !input.trim()}><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg></button></div></div>
       </main>
-    </div>
+      {settingsOpen && (
+        <div className="settings-overlay" onClick={() => setSettingsOpen(false)}>
+          <div className="settings-modal" onClick={e => e.stopPropagation()}>
+            <div className="settings-header">
+              <h2>个人设置</h2>
+              <button className="settings-close" onClick={() => setSettingsOpen(false)}>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+              </button>
+            </div>
+            <div className="settings-body">
+              <label className="settings-label">预设提示词（System Prompt）</label>
+              <textarea className="settings-textarea" value={systemPrompt} onChange={e => setSystemPrompt(e.target.value)} rows={4} placeholder="定义 AI 助手的人设和行为…" />
+              <label className="settings-label">默认模式</label>
+              <div className="settings-mode-select">
+                <button className={`mode-btn${defaultAgentMode === 'chat' ? ' active' : ''}`} onClick={() => setDefaultAgentMode('chat')}>对话</button>
+                <button className={`mode-btn${defaultAgentMode === 'agent' ? ' active' : ''}`} onClick={() => setDefaultAgentMode('agent')}>Agent</button>
+              </div>
+            </div>
+            <div className="settings-footer">
+              <button className="settings-save" onClick={saveSettings}>保存</button>
+            </div>
+          </div>
+        </div>
+      )}
+   </div>
   )
 }
 export default App
