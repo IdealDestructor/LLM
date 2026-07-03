@@ -1,7 +1,8 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import AIIcon from './AIIcon'
 import './App.css'
-const API = 'http://localhost:3001'
+// 开发环境连接本地后端，生产构建后连接 CloudRun 后端
+const API = import.meta.env.DEV ? 'http://localhost:3001' : 'https://llm-agent-277530-9-1253631440.sh.run.tcloudbase.com'
 
 function renderMarkdown(text) {
   if (!text) return null
@@ -34,6 +35,7 @@ function App() {
   const [messages, setMessages] = useState([])
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
+  const [pendingImages, setPendingImages] = useState([])
   const isMobile = typeof window !== 'undefined' && window.innerWidth <= 768; const [sidebarOpen, setSidebarOpen] = useState(!isMobile)
   const [modelList, setModelList] = useState([])
   const [selectedModel, setSelectedModel] = useState('')
@@ -41,6 +43,7 @@ function App() {
   const [agentMode, setAgentMode] = useState('chat')
   const messagesEndRef = useRef(null)
   const textareaRef = useRef(null)
+  const fileInputRef = useRef(null)
 
   // ─── 用户设置状态 ────────────────────────────────────────
   const [theme, setTheme] = useState('auto')
@@ -63,6 +66,66 @@ function App() {
   const saveSettings = async () => { try { await fetch(`${API}/api/settings`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ systemPrompt, defaultAgentMode }) }); setSettingsOpen(false) } catch (e) { console.error(e) } }
 
   const handleModelChange = (id) => { setSelectedModel(id); const mc = modelList.find(m => m.id === id); if (mc) setSelectedMaxTokens(mc.maxTokens) }
+
+  // ─── 图片上传处理 ────────────────────────────────────────
+  const MAX_IMAGES = 4
+  const MAX_IMAGE_SIZE = 10 * 1024 * 1024 // 10MB
+
+  const handleFileSelect = (e) => {
+    const files = Array.from(e.target.files || [])
+    for (const file of files) {
+      if (!file.type.startsWith('image/')) continue
+      if (file.size > MAX_IMAGE_SIZE) { alert(`图片 "${file.name}" 超过 10MB 限制`); continue }
+      if (pendingImages.length >= MAX_IMAGES) { alert(`最多上传 ${MAX_IMAGES} 张图片`); break }
+      const reader = new FileReader()
+      reader.onload = () => {
+        setPendingImages(prev => [...prev, { dataUrl: reader.result, name: file.name }])
+      }
+      reader.readAsDataURL(file)
+    }
+    // 重置 input 以便重复选择同一文件
+    if (fileInputRef.current) fileInputRef.current.value = ''
+  }
+
+  // 粘贴图片
+  const handlePaste = (e) => {
+    const items = Array.from(e.clipboardData?.items || [])
+    for (const item of items) {
+      if (item.type.startsWith('image/')) {
+        const file = item.getAsFile()
+        if (!file) continue
+        if (pendingImages.length >= MAX_IMAGES) { alert(`最多上传 ${MAX_IMAGES} 张图片`); break }
+        const reader = new FileReader()
+        reader.onload = () => {
+          setPendingImages(prev => [...prev, { dataUrl: reader.result, name: 'pasted.png' }])
+        }
+        reader.readAsDataURL(file)
+      }
+    }
+  }
+
+  const removePendingImage = (idx) => {
+    setPendingImages(prev => prev.filter((_, i) => i !== idx))
+  }
+
+  // 从消息内容中提取图片 URL（用于显示）
+  function extractMessageImages(msg) {
+    if (msg.images) return msg.images
+    if (Array.isArray(msg.content)) {
+      return msg.content.filter(c => c.type === 'image_url').map(c => c.image_url.url)
+    }
+    return []
+  }
+
+  // 从消息内容中提取纯文本
+  function extractMessageText(content) {
+    if (typeof content === 'string') return content
+    if (Array.isArray(content)) {
+      return content.filter(c => c.type === 'text').map(c => c.text).join('')
+    }
+    return ''
+  }
+
   const createNewSession = async () => { try { const r = await fetch(`${API}/api/sessions`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title: '新对话' }) }); const d = await r.json(); setActiveSessionId(d.sessionId); setMessages([{ role: 'assistant', content: '你好！我是 AI 助手，有什么可以帮助你的吗？', streaming: false, steps: [] }]); await refreshSessionList() } catch (e) { console.error(e) } }
   const switchToSession = async (sid) => { if (sid === activeSessionId) return; try { const r = await fetch(`${API}/api/sessions/${sid}`); const d = await r.json(); setActiveSessionId(sid); const l = d.messages.map(m => ({ ...m, streaming: false, steps: [] })); setMessages(l.length === 0 ? [{ role: 'assistant', content: '你好！我是 AI 助手，有什么可以帮助你的吗？', streaming: false, steps: [] }] : l) } catch (e) { console.error(e) } }
   const deleteSession = async (sid, e) => { e.stopPropagation(); try { await fetch(`${API}/api/sessions/${sid}`, { method: 'DELETE' }); await refreshSessionList(); if (sid === activeSessionId) { const r = await fetch(`${API}/api/sessions`); const d = await r.json(); if (d.sessions.length > 0) await switchToSession(d.sessions[0].id); else await createNewSession() } } catch (e) { console.error(e) } }
@@ -72,13 +135,14 @@ function App() {
   useEffect(() => { adjustH() }, [input, adjustH])
 
   const sendMessage = async () => {
-    if (!input.trim() || loading || !activeSessionId) return
-    const um = input.trim(); setInput(''); setLoading(true)
-    setMessages(p => [...p, { role: 'user', content: um }])
+    if ((!input.trim() && pendingImages.length === 0) || loading || !activeSessionId) return
+    const um = input.trim(); const imgs = [...pendingImages]
+    setInput(''); setPendingImages([]); setLoading(true)
+    setMessages(p => [...p, { role: 'user', content: um, images: imgs.map(i => i.dataUrl) }])
     setMessages(p => [...p, { role: 'assistant', content: '', streaming: true, steps: [] }])
     const ep = agentMode === 'agent' ? '/api/chat/agent' : '/api/chat/stream'
     try {
-      const resp = await fetch(`${API}${ep}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message: um, sessionId: activeSessionId, model: selectedModel, maxTokens: selectedMaxTokens }) })
+      const resp = await fetch(`${API}${ep}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message: um, sessionId: activeSessionId, model: selectedModel, maxTokens: selectedMaxTokens, images: imgs.map(i => i.dataUrl) }) })
       if (!resp.body) throw new Error('No ReadableStream')
       const reader = resp.body.getReader(), decoder = new TextDecoder('utf-8')
       let buf = '', fc = '', done = false, aSteps = []
@@ -138,20 +202,48 @@ function App() {
           </div>
         </header>
         <div className="messages">
-          {messages.map((msg, i) => (
-            <div key={i} className={`message ${msg.role}${msg.streaming ? ' streaming' : ''}`}>
-              <div className="message-avatar">{msg.role === 'user' ? <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M12 12c2.7 0 5-2.3 5-5s-2.3-5-5-5-5 2.3-5 5 2.3 5 5 5zm0 2c-3.3 0-10 1.7-10 5v2h20v-2c0-3.3-6.7-5-10-5z"/></svg> : <AIIcon size={20} streaming={msg.streaming} />}</div>
-              <div className="message-body">
-                {msg.role === 'assistant' && msg.streaming && !msg.content && !msg.steps?.length && <div className="thinking-dots"><span></span><span></span><span></span></div>}
-                {renderSteps(msg.steps)}
-                {msg.role === 'assistant' ? renderMarkdown(msg.content) : msg.content}
-                {msg.streaming && msg.content && <span className="cursor">▎</span>}
-              </div>
-            </div>
-          ))}
+         {messages.map((msg, i) => (
+           <div key={i} className={`message ${msg.role}${msg.streaming ? ' streaming' : ''}`}>
+             <div className="message-avatar">{msg.role === 'user' ? <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M12 12c2.7 0 5-2.3 5-5s-2.3-5-5-5-5 2.3-5 5 2.3 5 5 5zm0 2c-3.3 0-10 1.7-10 5v2h20v-2c0-3.3-6.7-5-10-5z"/></svg> : <AIIcon size={20} streaming={msg.streaming} />}</div>
+             <div className="message-body">
+               {msg.role === 'assistant' && msg.streaming && !msg.content && !msg.steps?.length && <div className="thinking-dots"><span></span><span></span><span></span></div>}
+               {renderSteps(msg.steps)}
+                {msg.role === 'user' && extractMessageImages(msg).length > 0 && (
+                  <div className="message-images">
+                    {extractMessageImages(msg).map((imgUrl, j) => (
+                      <img key={j} src={imgUrl} className="message-image" alt={`图片 ${j + 1}`} onClick={() => window.open(imgUrl, '_blank')} />
+                    ))}
+                  </div>
+                )}
+                {msg.role === 'assistant' ? renderMarkdown(msg.content) : (extractMessageText(msg.content) || msg.content)}
+               {msg.streaming && msg.content && <span className="cursor">▎</span>}
+             </div>
+           </div>
+         ))}
           <div ref={messagesEndRef} />
         </div>
-        <div className="input-area"><div className="input-wrapper"><textarea ref={textareaRef} value={input} onChange={e => setInput(e.target.value)} onKeyDown={handleKeyDown} placeholder={agentMode === 'agent' ? 'Agent 模式：输入问题，AI 会自主推理和调用工具…' : '输入消息，Enter 发送，Shift+Enter 换行…'} rows={1} /><button className={`send-btn${input.trim() && !loading ? ' active' : ''}`} onClick={sendMessage} disabled={loading || !input.trim()}><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg></button></div></div>
+        <div className="input-area">
+          {pendingImages.length > 0 && (
+            <div className="image-preview-bar">
+              {pendingImages.map((img, idx) => (
+                <div key={idx} className="image-preview-item">
+                  <img src={img.dataUrl} alt={img.name} />
+                  <button className="image-preview-remove" onClick={() => removePendingImage(idx)} title="移除">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+          <div className="input-wrapper">
+            <input ref={fileInputRef} type="file" accept="image/*" multiple onChange={handleFileSelect} style={{ display: 'none' }} />
+            <button className="upload-btn" onClick={() => fileInputRef.current?.click()} title="上传图片" disabled={loading || pendingImages.length >= 4}>
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21.44 15.91l-1.41 1.41a2 2 0 0 1-2.83 0L12 12l-5.2 5.32a2 2 0 0 1-2.83 0l-1.41-1.41a2 2 0 0 1 0-2.83L9.17 5.5a2 2 0 0 1 2.83 0l1.41 1.41a2 2 0 0 1 0 2.83L12 9.17l3.59-3.59a2 2 0 0 1 2.83 0l1.41 1.41a2 2 0 0 1 0 2.83L15.91 12l3.59 3.59a2 2 0 0 1 0 2.83z" transform="rotate(45 12 12)"/><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            </button>
+            <textarea ref={textareaRef} value={input} onChange={e => setInput(e.target.value)} onKeyDown={handleKeyDown} onPaste={handlePaste} placeholder={agentMode === 'agent' ? 'Agent 模式：输入问题，AI 会自主推理和调用工具…' : '输入消息，Enter 发送，Shift+Enter 换行…'} rows={1} />
+            <button className={`send-btn${(input.trim() || pendingImages.length > 0) && !loading ? ' active' : ''}`} onClick={sendMessage} disabled={loading || (!input.trim() && pendingImages.length === 0)}><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg></button>
+          </div>
+        </div>
       </main>
       {settingsOpen && (
         <div className="settings-overlay" onClick={() => setSettingsOpen(false)}>

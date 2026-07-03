@@ -1,0 +1,20 @@
+node_modules
+frontend/node_modules
+.env
+.DS_Store
+.waylog
+.claude
+*.md
+01-hello.js
+02-multi-turn.js
+03-stream.js
+llm-client.js
+.git
+.gitignore
+
+# 数据库文件不入镜像（通过 volume 挂载持久化）
+*.db
+*.db-wal
+*.db-shm
+data/agent.db
+data/sessions_migrated

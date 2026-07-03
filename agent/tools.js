@@ -23,6 +23,14 @@
 const tools = new Map();
 
 // ─── 注册工具 ────────────────────────────────────────────
+
+// 延迟加载 knowledge（避免 db 尚未初始化时报错）
+let _knowledge = null;
+function getKnowledge() {
+  if (!_knowledge) _knowledge = require('./knowledge');
+  return _knowledge;
+}
+
 function register(tool) {
   tools.set(tool.name, tool);
 }
@@ -149,6 +157,111 @@ register({
       return matches.map(m => m.answer).join('\n\n');
     }
     return `未找到与 "${query}" 相关的信息。请尝试更具体的关键词。`;
+  },
+});
+
+module.exports = {
+  register,
+  getDefinitions,
+  listTools,
+  execute,
+};
+// ─── search：向量语义搜索 ────────────────────────────────
+// 使用 knowledge.search() 对知识库进行语义检索
+// 如果知识库为空或 embeddings API 不可用，回退到内置知识
+
+const fallbackKnowledge = [
+  { answer: 'Python 安装：访问 python.org 下载对应系统安装包，或使用包管理器如 brew install python (macOS)、apt install python3 (Ubuntu)。' },
+  { answer: 'Node.js 安装：访问 nodejs.org 下载 LTS 版本，或使用 nvm（Node Version Manager）管理多版本。' },
+  { answer: 'Git 基础流程：git init → git add . → git commit -m "msg" → git push。' },
+  { answer: 'React 组件是返回 JSX 的函数。Hooks：useState、useEffect、useRef 等。' },
+  { answer: 'Docker 基础：docker build -t img . → docker run -p 8080:80 img → docker ps。' },
+];
+
+register({
+  name: 'search',
+  description: '搜索知识库获取相关信息。当用户的问题涉及技术知识时使用此工具。基于向量语义搜索，支持自然语言提问。',
+  parameters: {
+    type: 'object',
+    properties: {
+      query: {
+        type: 'string',
+        description: '搜索关键词或自然语言问题',
+      },
+    },
+    required: ['query'],
+  },
+  execute: async ({ query }) => {
+    // 1. 尝试向量语义搜索
+    try {
+      const results = await getKnowledge().search(query, 3);
+      if (results.length > 0) {
+        return results.map(r =>
+          `[相似度: ${r.score.toFixed(2)}] ${r.content}`
+        ).join('\n\n');
+      }
+    } catch (e) {
+      console.warn('向量搜索失败，回退到内置知识:', e.message);
+    }
+
+    // 2. 回退：简单的内置知识匹配
+    const q = query.toLowerCase();
+    const matches = fallbackKnowledge.filter(k =>
+      q.split(/\s+/).some(word => word.length > 1 && (
+        k.answer.toLowerCase().includes(word) ||
+        query.toLowerCase().includes(word)
+      ))
+    );
+    if (matches.length > 0) {
+      return matches.map(m => m.answer).join('\n\n');
+    }
+    return `未找到与 "${query}" 相关的信息。可以用 knowledge_base_add 工具添加相关知识。`;
+  },
+});
+
+// ─── knowledge_base_add：向知识库添加条目 ────────────────
+// Agent 可自主调用此工具将新知识写入知识库（自动生成向量）
+register({
+  name: 'knowledge_base_add',
+  description: '向知识库添加一条知识。添加后会自动生成向量嵌入，支持后续语义搜索。',
+  parameters: {
+    type: 'object',
+    properties: {
+      content: {
+        type: 'string',
+        description: '知识内容文本',
+      },
+      source: {
+        type: 'string',
+        description: '知识来源（可选），如 URL、书名、文件名',
+      },
+    },
+    required: ['content'],
+  },
+  execute: async ({ content, source }) => {
+    const { id, hasVector } = await getKnowledge().add(content, source || 'agent');
+    return `已添加知识条目 (ID: ${id})${hasVector ? '，向量嵌入已生成' : '，向量嵌入未生成'}`;
+  },
+});
+
+// ─── knowledge_base_remove：从知识库删除条目 ─────────────
+register({
+  name: 'knowledge_base_remove',
+  description: '从知识库中删除一条知识。',
+  parameters: {
+    type: 'object',
+    properties: {
+      id: {
+        type: 'integer',
+        description: '要删除的知识条目 ID',
+      },
+    },
+    required: ['id'],
+  },
+  execute: async ({ id }) => {
+    const removed = await getKnowledge().remove(id);
+    if (!removed) return `未找到 ID 为 ${id} 的知识条目`;
+    return `已删除知识条目 (ID: ${id})`;
   },
 });
 

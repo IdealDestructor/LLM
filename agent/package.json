@@ -12,6 +12,9 @@
   "type": "commonjs",
   "dependencies": {
     "@anthropic-ai/sdk": "^0.90.0",
+    "@qdrant/js-client-rest": "^1.18.0",
+    "better-sqlite3": "^12.11.1",
+    "ioredis": "^5.11.1",
     "openai": "^6.34.0"
   }
 }
