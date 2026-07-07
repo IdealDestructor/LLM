@@ -8,7 +8,7 @@ frontend/node_modules
 01-hello.js
 02-multi-turn.js
 03-stream.js
-llm-client.js
+# llm-client.js -- 生产部署需要
 .git
 .gitignore
 

@@ -10,9 +10,15 @@ const { getDb } = require('./db');
 
 // 默认设置
 const DEFAULT_SETTINGS = {
-  theme: 'auto',           // 'light' | 'dark' | 'auto'
+  theme: 'auto',              // 'light' | 'dark' | 'auto'
   systemPrompt: '你是Francis的AI助手。',
-  defaultAgentMode: 'chat', // 'chat' | 'agent'
+  defaultAgentMode: 'chat',    // 'chat' | 'agent'
+  defaultMaxTokens: 4096,
+  systemPromptTemplates: [],   // [{ name, content }]
+  mcpServers: [],              // [{ name, type, command, args, url, enabled }]
+  enabledPlugins: [],          // string[] — 启用的插件名称列表
+  enabledSkills: [],           // string[] — 启用的技能名称列表
+  disabledTools: [],           // string[] — 禁用的工具名称列表
 };
 
 let settings = { ...DEFAULT_SETTINGS };

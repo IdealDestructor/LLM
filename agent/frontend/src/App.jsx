@@ -48,22 +48,80 @@ function App() {
   // ─── 用户设置状态 ────────────────────────────────────────
   const [theme, setTheme] = useState('auto')
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [settingsTab, setSettingsTab] = useState('general')
   const [systemPrompt, setSystemPrompt] = useState('你是Francis的AI助手。')
   const [defaultAgentMode, setDefaultAgentMode] = useState('chat')
+  const [defaultMaxTokens, setDefaultMaxTokens] = useState(4096)
 
+  // 系统提示词模板
+  const [promptTemplates, setPromptTemplates] = useState([])
+  const [templateName, setTemplateName] = useState('')
+
+  // 工具管理
+  const [toolList, setToolList] = useState([])
+  const [disabledTools, setDisabledTools] = useState([])
+  const [newToolForm, setNewToolForm] = useState({ name: '', description: '', execute: '' })
+
+  // MCP 服务
+  const [mcpServers, setMcpServers] = useState([])
+  const [mcpConnections, setMcpConnections] = useState([])
+  const [mcpForm, setMcpForm] = useState({ name: '', type: 'stdio', command: '', args: '', url: '' })
+
+  // 插件 & 技能
+  const [plugins, setPlugins] = useState([])
+  const [skills, setSkills] = useState([])
+  const [skillContent, setSkillContent] = useState('')
+
+  // ─── 数据加载 ──────────────────────────────────────────
   useEffect(() => { (async () => { try { const [mr, sr] = await Promise.all([fetch(`${API}/api/models`), fetch(`${API}/api/sessions`)]); const md = await mr.json(), sd = await sr.json(); setModelList(md.models); setSelectedModel(md.defaultModel); setSelectedMaxTokens(md.models.find(m => m.id === md.defaultModel)?.maxTokens || md.defaultMaxTokens); setSessionList(sd.sessions); if (sd.sessions.length > 0) await switchToSession(sd.sessions[0].id); else await createNewSession() } catch (e) { console.error(e) } })() }, [])
 
-  // 加载用户设置
-  useEffect(() => { (async () => { try { const r = await fetch(`${API}/api/settings`); const d = await r.json(); if (d.theme) setTheme(d.theme); if (d.systemPrompt) setSystemPrompt(d.systemPrompt); if (d.defaultAgentMode) setDefaultAgentMode(d.defaultAgentMode) } catch (e) { console.error(e) } })() }, [])
+  useEffect(() => { (async () => { try { const r = await fetch(`${API}/api/settings`); const d = await r.json(); if (d.theme) setTheme(d.theme); if (d.systemPrompt) setSystemPrompt(d.systemPrompt); if (d.defaultAgentMode) setDefaultAgentMode(d.defaultAgentMode); if (d.defaultMaxTokens) setDefaultMaxTokens(d.defaultMaxTokens); if (d.disabledTools) setDisabledTools(d.disabledTools); if (d.systemPromptTemplates) setPromptTemplates(d.systemPromptTemplates) } catch (e) { console.error(e) } })() }, [])
 
-  // 应用主题到 <html data-theme="...">
   useEffect(() => { document.documentElement.setAttribute('data-theme', theme) }, [theme])
 
-  // 主题循环切换：auto → light → dark → auto
   const cycleTheme = () => { const next = { auto: 'light', light: 'dark', dark: 'auto' }; const nt = next[theme] || 'auto'; setTheme(nt); fetch(`${API}/api/settings`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ theme: nt }) }).catch(() => {}) }
 
-  // 保存设置到后端
-  const saveSettings = async () => { try { await fetch(`${API}/api/settings`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ systemPrompt, defaultAgentMode }) }); setSettingsOpen(false) } catch (e) { console.error(e) } }
+  const saveSettings = async (extra = {}) => { try { await fetch(`${API}/api/settings`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ systemPrompt, defaultAgentMode, defaultMaxTokens, disabledTools, systemPromptTemplates: promptTemplates, ...extra }) }); setSettingsOpen(false) } catch (e) { console.error(e) } }
+
+  // ─── 工具管理 ──────────────────────────────────────────
+  const loadTools = async () => { try { const r = await fetch(`${API}/api/tools`); const d = await r.json(); setToolList(d.tools || []) } catch {} }
+  useEffect(() => { if (settingsOpen) loadTools() }, [settingsOpen])
+
+  const toggleTool = (name) => {
+    setDisabledTools(prev => prev.includes(name) ? prev.filter(n => n !== name) : [...prev, name])
+  }
+
+  const addCustomTool = async () => { try { await fetch(`${API}/api/tools`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(newToolForm) }); setNewToolForm({ name: '', description: '', execute: '' }); loadTools() } catch (e) { alert(e.message) } }
+  const removeTool = async (name) => { try { await fetch(`${API}/api/tools/${name}`, { method: 'DELETE' }); loadTools() } catch {} }
+
+  // ─── MCP 服务管理 ──────────────────────────────────────
+  const loadMcpServers = async () => { try { const [sr, cr] = await Promise.all([fetch(`${API}/api/mcp/servers`), fetch(`${API}/api/mcp/connections`)]); const sd = await sr.json(), cd = await cr.json(); setMcpServers(sd.servers || []); setMcpConnections(cd.connections || []) } catch {} }
+  useEffect(() => { if (settingsOpen) loadMcpServers() }, [settingsOpen])
+
+  const saveMcpServer = async () => { try { await fetch(`${API}/api/mcp/servers`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(mcpForm) }); setMcpForm({ name: '', type: 'stdio', command: '', args: '', url: '' }); loadMcpServers() } catch (e) { alert(e.message) } }
+  const deleteMcpServer = async (name) => { try { await fetch(`${API}/api/mcp/servers/${name}`, { method: 'DELETE' }); loadMcpServers() } catch {} }
+  const connectMcp = async (name) => { try { await fetch(`${API}/api/mcp/servers/${name}/connect`, { method: 'POST' }); loadMcpServers() } catch {} }
+  const disconnectMcp = async (name) => { try { await fetch(`${API}/api/mcp/servers/${name}/disconnect`, { method: 'POST' }); loadMcpServers() } catch {} }
+
+  // ─── 插件 & 技能 ──────────────────────────────────────
+  const loadPlugins = async () => { try { const r = await fetch(`${API}/api/plugins`); const d = await r.json(); setPlugins(d.plugins || []) } catch {} }
+  const loadSkills = async () => { try { const r = await fetch(`${API}/api/skills`); const d = await r.json(); setSkills(d.skills || []) } catch {} }
+  const loadSkillContent = async (name) => { try { const r = await fetch(`${API}/api/skills/${name}`); const d = await r.json(); setSkillContent(d.content || '') } catch {} }
+  useEffect(() => { if (settingsOpen && settingsTab === 'plugins') loadPlugins() }, [settingsOpen, settingsTab])
+  useEffect(() => { if (settingsOpen && settingsTab === 'skills') loadSkills() }, [settingsOpen, settingsTab])
+
+  // ─── 系统提示词模板 ────────────────────────────────────
+  const saveTemplate = () => {
+    if (!templateName.trim() || !systemPrompt.trim()) return
+    const updated = [...promptTemplates]
+    const idx = updated.findIndex(t => t.name === templateName)
+    if (idx >= 0) updated[idx] = { name: templateName, content: systemPrompt }
+    else updated.push({ name: templateName, content: systemPrompt })
+    setPromptTemplates(updated)
+    setTemplateName('')
+  }
+  const applyTemplate = (tpl) => { setSystemPrompt(tpl.content) }
+  const deleteTemplate = (name) => { setPromptTemplates(prev => prev.filter(t => t.name !== name)) }
 
   const handleModelChange = (id) => { setSelectedModel(id); const mc = modelList.find(m => m.id === id); if (mc) setSelectedMaxTokens(mc.maxTokens) }
 
@@ -247,24 +305,141 @@ function App() {
       </main>
       {settingsOpen && (
         <div className="settings-overlay" onClick={() => setSettingsOpen(false)}>
-          <div className="settings-modal" onClick={e => e.stopPropagation()}>
+          <div className="settings-modal settings-modal-wide" onClick={e => e.stopPropagation()}>
             <div className="settings-header">
               <h2>个人设置</h2>
               <button className="settings-close" onClick={() => setSettingsOpen(false)}>
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
               </button>
             </div>
+            <div className="settings-tabs">
+              <button className={`settings-tab${settingsTab === 'general' ? ' active' : ''}`} onClick={() => setSettingsTab('general')}>通用</button>
+              <button className={`settings-tab${settingsTab === 'prompt' ? ' active' : ''}`} onClick={() => setSettingsTab('prompt')}>提示词</button>
+              <button className={`settings-tab${settingsTab === 'tools' ? ' active' : ''}`} onClick={() => setSettingsTab('tools')}>工具</button>
+              <button className={`settings-tab${settingsTab === 'mcp' ? ' active' : ''}`} onClick={() => setSettingsTab('mcp')}>MCP</button>
+              <button className={`settings-tab${settingsTab === 'plugins' ? ' active' : ''}`} onClick={() => setSettingsTab('plugins')}>插件</button>
+              <button className={`settings-tab${settingsTab === 'skills' ? ' active' : ''}`} onClick={() => setSettingsTab('skills')}>技能</button>
+            </div>
             <div className="settings-body">
-              <label className="settings-label">预设提示词（System Prompt）</label>
-              <textarea className="settings-textarea" value={systemPrompt} onChange={e => setSystemPrompt(e.target.value)} rows={4} placeholder="定义 AI 助手的人设和行为…" />
-              <label className="settings-label">默认模式</label>
-              <div className="settings-mode-select">
-                <button className={`mode-btn${defaultAgentMode === 'chat' ? ' active' : ''}`} onClick={() => setDefaultAgentMode('chat')}>对话</button>
-                <button className={`mode-btn${defaultAgentMode === 'agent' ? ' active' : ''}`} onClick={() => setDefaultAgentMode('agent')}>Agent</button>
-              </div>
+
+              {/* ═══ 通用 ═══ */}
+              {settingsTab === 'general' && <>
+                <label className="settings-label">默认模式</label>
+                <div className="settings-mode-select">
+                  <button className={`mode-btn${defaultAgentMode === 'chat' ? ' active' : ''}`} onClick={() => setDefaultAgentMode('chat')}>对话</button>
+                  <button className={`mode-btn${defaultAgentMode === 'agent' ? ' active' : ''}`} onClick={() => setDefaultAgentMode('agent')}>Agent</button>
+                </div>
+                <label className="settings-label">默认最大 Token</label>
+                <input className="settings-input" type="number" value={defaultMaxTokens} onChange={e => setDefaultMaxTokens(Number(e.target.value))} min={1} max={16384} />
+              </>}
+
+              {/* ═══ 系统提示词 ═══ */}
+              {settingsTab === 'prompt' && <>
+                <label className="settings-label">预设提示词（System Prompt）</label>
+                <textarea className="settings-textarea" value={systemPrompt} onChange={e => setSystemPrompt(e.target.value)} rows={5} placeholder="定义 AI 助手的人设和行为…" />
+                <div className="settings-row">
+                  <input className="settings-input settings-input-sm" value={templateName} onChange={e => setTemplateName(e.target.value)} placeholder="模板名称…" />
+                  <button className="settings-btn" onClick={saveTemplate}>{templateName && promptTemplates.find(t => t.name === templateName) ? '更新模板' : '保存为模板'}</button>
+                </div>
+                {promptTemplates.length > 0 && <div className="template-list">{promptTemplates.map((t, i) => (
+                  <div key={i} className="template-item">
+                    <span className="template-name" onClick={() => applyTemplate(t)} title="点击应用">{t.name}</span>
+                    <span className="template-preview">{t.content.slice(0, 60)}{t.content.length > 60 ? '…' : ''}</span>
+                    <button className="template-delete" onClick={() => deleteTemplate(t.name)} title="删除模板">
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                    </button>
+                  </div>
+                ))}</div>}
+              </>}
+
+              {/* ═══ 工具管理 ═══ */}
+              {settingsTab === 'tools' && <>
+                <label className="settings-label">内置工具（点击切换启用/禁用）</label>
+                <div className="tool-list">{toolList.map((t, i) => (
+                  <div key={i} className={`tool-item${disabledTools.includes(t.name) ? ' disabled' : ''}`} onClick={() => toggleTool(t.name)}>
+                    <span className={`tool-toggle${disabledTools.includes(t.name) ? '' : ' enabled'}`}>
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><polyline points="20 6 9 17 4 12"/></svg>
+                    </span>
+                    <span className="tool-name">{t.name}</span>
+                    <span className="tool-desc">{t.description}</span>
+                  </div>
+                ))}</div>
+                <label className="settings-label">自定义工具</label>
+                <div className="new-tool-form">
+                  <input className="settings-input" value={newToolForm.name} onChange={e => setNewToolForm(p => ({ ...p, name: e.target.value }))} placeholder="工具名称" />
+                  <input className="settings-input" value={newToolForm.description} onChange={e => setNewToolForm(p => ({ ...p, description: e.target.value }))} placeholder="描述" />
+                  <textarea className="settings-textarea settings-textarea-code" value={newToolForm.execute} onChange={e => setNewToolForm(p => ({ ...p, execute: e.target.value }))} rows={3} placeholder="async (args) => { return 'result' }" />
+                  <button className="settings-btn" onClick={addCustomTool} disabled={!newToolForm.name || !newToolForm.execute}>添加工具</button>
+                </div>
+              </>}
+
+              {/* ═══ MCP 服务 ═══ */}
+              {settingsTab === 'mcp' && <>
+                <label className="settings-label">MCP 服务配置</label>
+                <div className="mcp-list">{mcpServers.map((s, i) => {
+                  const connected = mcpConnections.find(c => c.name === s.name)
+                  return (<div key={i} className="mcp-item">
+                    <div className="mcp-info">
+                      <span className="mcp-name">{s.name}</span>
+                      <span className="mcp-type">{s.type}</span>
+                      <span className="mcp-detail">{s.type === 'stdio' ? s.command : s.url}</span>
+                      <span className={`mcp-status${connected ? ' connected' : ''}`}>{connected ? '已连接' : '未连接'}</span>
+                    </div>
+                    <div className="mcp-actions">
+                      {connected
+                        ? <button className="settings-btn settings-btn-sm" onClick={() => disconnectMcp(s.name)}>断开</button>
+                        : <button className="settings-btn settings-btn-sm" onClick={() => connectMcp(s.name)}>连接</button>}
+                      <button className="settings-btn settings-btn-sm settings-btn-danger" onClick={() => deleteMcpServer(s.name)}>删除</button>
+                    </div>
+                  </div>)
+                })}</div>
+                {mcpServers.length === 0 && <p className="settings-hint">暂无 MCP 服务配置</p>}
+                <label className="settings-label">添加 MCP 服务</label>
+                <div className="mcp-form">
+                  <input className="settings-input" value={mcpForm.name} onChange={e => setMcpForm(p => ({ ...p, name: e.target.value }))} placeholder="服务名称" />
+                  <select className="settings-select" value={mcpForm.type} onChange={e => setMcpForm(p => ({ ...p, type: e.target.value }))}>
+                    <option value="stdio">stdio（本地进程）</option>
+                    <option value="remote">remote（HTTP）</option>
+                  </select>
+                  {mcpForm.type === 'stdio' && <>
+                    <input className="settings-input" value={mcpForm.command} onChange={e => setMcpForm(p => ({ ...p, command: e.target.value }))} placeholder="启动命令，如 npx -y @modelcontextprotocol/server-filesystem" />
+                    <input className="settings-input" value={mcpForm.args} onChange={e => setMcpForm(p => ({ ...p, args: e.target.value }))} placeholder="参数（可选）" />
+                  </>}
+                  {mcpForm.type === 'remote' && <>
+                    <input className="settings-input" value={mcpForm.url} onChange={e => setMcpForm(p => ({ ...p, url: e.target.value }))} placeholder="https://mcp.example.com/mcp" />
+                  </>}
+                  <button className="settings-btn" onClick={saveMcpServer} disabled={!mcpForm.name}>保存配置</button>
+                </div>
+              </>}
+
+              {/* ═══ 插件 ═══ */}
+              {settingsTab === 'plugins' && <>
+                <label className="settings-label">可用插件</label>
+                {plugins.length === 0 && <p className="settings-hint">未发现插件。插件文件放在 .opencode/plugins/ 或 ~/.config/opencode/plugins/ 目录下。</p>}
+                <div className="plugin-list">{plugins.map((p, i) => (
+                  <div key={i} className="plugin-item">
+                    <span className="plugin-name">{p.name}</span>
+                    <span className="plugin-file">{p.file}</span>
+                  </div>
+                ))}</div>
+              </>}
+
+              {/* ═══ 技能 ═══ */}
+              {settingsTab === 'skills' && <>
+                <label className="settings-label">可用技能</label>
+                {skills.length === 0 && <p className="settings-hint">未发现技能。技能放在 ~/.agents/skills/ 目录下。</p>}
+                <div className="skill-list">{skills.map((s, i) => (
+                  <div key={i} className="skill-item">
+                    <span className="skill-name">{s.name}</span>
+                    <button className="settings-btn settings-btn-sm" onClick={() => loadSkillContent(s.name)}>查看内容</button>
+                  </div>
+                ))}</div>
+                {skillContent && <div className="skill-content"><pre>{skillContent}</pre></div>}
+              </>}
+
             </div>
             <div className="settings-footer">
-              <button className="settings-save" onClick={saveSettings}>保存</button>
+              <button className="settings-save" onClick={() => saveSettings()}>保存</button>
             </div>
           </div>
         </div>

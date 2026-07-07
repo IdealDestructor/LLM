@@ -8,6 +8,7 @@ const settings = require('./settings');
 const db = require('./db');
 const redis = require('./redis');
 const knowledge = require('./knowledge');
+const mcpManager = require('./mcp-manager');
 const fs = require('fs');
 const path = require('path');
 
@@ -120,9 +121,60 @@ function extractText(content) {
   return '';
 }
 
-// ─── 路由：工具列表 ────────────────────────────────────────
+// ─── 路由：工具管理 ────────────────────────────────────────
+// GET    /api/tools       — 工具列表
+// GET    /api/tools/:name — 获取单个工具
+// POST   /api/tools       — 添加工具
+// DELETE /api/tools/:name — 删除工具
+// PATCH  /api/tools/:name — 更新工具
 function handleTools(req, res) {
   json(res, { tools: tools.listTools() });
+}
+
+function handleToolByName(req, res, method, name) {
+  if (method === 'GET') {
+    const tool = tools.getTool(name);
+    if (!tool) return json(res, { error: `工具不存在: ${name}` }, 404);
+    return json(res, { tool });
+  }
+  if (method === 'DELETE') {
+    const result = tools.removeTool(name);
+    if (!result.ok) return json(res, { error: result.error }, 404);
+    return json(res, result);
+  }
+  if (method === 'PATCH') {
+    readBody(req).then(body => {
+      try {
+        const updates = JSON.parse(body);
+        const result = tools.updateTool(name, updates);
+        if (!result.ok) return json(res, { error: result.error }, 400);
+        json(res, result);
+      } catch (e) {
+        json(res, { error: e.message }, 400);
+      }
+    }).catch(e => json(res, { error: e.message }, 500));
+    return;
+  }
+  json(res, { error: 'Method not allowed' }, 405);
+}
+
+async function handleAddTool(req, res) {
+  try {
+    const body = await readBody(req);
+    const parsed = JSON.parse(body);
+    const { name, description, parameters, execute } = parsed;
+    if (!execute) return json(res, { error: 'execute 函数代码必填' }, 400);
+    // 将字符串代码转为函数
+    const fn = typeof execute === 'string' ? eval(`(${execute})`) : execute;
+    const result = tools.addTool(name, {
+      description: description || '',
+      parameters: parameters || { type: 'object', properties: {} },
+      execute: fn,
+    });
+    json(res, result, 201);
+  } catch (e) {
+    json(res, { error: e.message }, 400);
+  }
 }
 
 // ─── 路由：用户设置 ────────────────────────────────────────
@@ -137,6 +189,168 @@ async function handleSettings(req, res, method) {
     return;
   }
   json(res, { error: "Method not allowed" }, 405);
+}
+
+// ─── 路由：系统提示词模板 ─────────────────────────────────────
+// GET    /api/settings/prompt-templates — 列出所有模板
+// POST   /api/settings/prompt-templates — 添加模板
+// DELETE /api/settings/prompt-templates/:name — 删除模板
+async function handlePromptTemplates(req, res, method) {
+  if (method === 'GET') {
+    const s = settings.get();
+    json(res, { templates: s.systemPromptTemplates || [] });
+    return;
+  }
+  if (method === 'POST') {
+    try {
+      const body = await readBody(req);
+      const { name, content } = JSON.parse(body);
+      if (!name || !content) return json(res, { error: 'name 和 content 必填' }, 400);
+      const s = settings.get();
+      const templates = [...(s.systemPromptTemplates || [])];
+      const idx = templates.findIndex(t => t.name === name);
+      if (idx >= 0) templates[idx] = { name, content };
+      else templates.push({ name, content });
+      settings.save({ systemPromptTemplates: templates });
+      json(res, { ok: true, templates });
+    } catch (e) { json(res, { error: e.message }, 400); }
+    return;
+  }
+  json(res, { error: 'Method not allowed' }, 405);
+}
+
+async function handleDeletePromptTemplate(req, res, method, name) {
+  if (method !== 'DELETE') return json(res, { error: 'Method not allowed' }, 405);
+  const s = settings.get();
+  const templates = (s.systemPromptTemplates || []).filter(t => t.name !== name);
+  settings.save({ systemPromptTemplates: templates });
+  json(res, { ok: true });
+}
+
+// ─── 路由：MCP 服务管理 ─────────────────────────────────────
+// GET    /api/mcp/servers          — 列出 MCP 服务配置
+// POST   /api/mcp/servers          — 添加 MCP 服务配置
+// DELETE /api/mcp/servers/:name    — 删除 MCP 服务配置
+// POST   /api/mcp/servers/:name/connect    — 连接
+// POST   /api/mcp/servers/:name/disconnect — 断开
+// GET    /api/mcp/connections      — 当前连接状态
+async function handleMcpServers(req, res, method) {
+  if (method === 'GET') {
+    const s = settings.get();
+    json(res, { servers: s.mcpServers || [] });
+    return;
+  }
+  if (method === 'POST') {
+    try {
+      const body = await readBody(req);
+      const cfg = JSON.parse(body);
+      if (!cfg.name || !cfg.type) return json(res, { error: 'name 和 type 必填' }, 400);
+      if (cfg.type === 'stdio' && !cfg.command) return json(res, { error: 'stdio 类型需要 command' }, 400);
+      if (cfg.type === 'remote' && !cfg.url) return json(res, { error: 'remote 类型需要 url' }, 400);
+      const s = settings.get();
+      const servers = [...(s.mcpServers || [])];
+      const idx = servers.findIndex(t => t.name === cfg.name);
+      if (idx >= 0) servers[idx] = cfg;
+      else servers.push(cfg);
+      settings.save({ mcpServers: servers });
+      json(res, { ok: true, servers }, idx >= 0 ? 200 : 201);
+    } catch (e) { json(res, { error: e.message }, 400); }
+    return;
+  }
+  json(res, { error: 'Method not allowed' }, 405);
+}
+
+async function handleMcpServerByName(req, res, method, name) {
+  if (method === 'DELETE') {
+    const s = settings.get();
+    const servers = (s.mcpServers || []).filter(t => t.name !== name);
+    settings.save({ mcpServers: servers });
+    mcpManager.disconnectServer(name);
+    json(res, { ok: true });
+    return;
+  }
+  json(res, { error: 'Method not allowed' }, 405);
+}
+
+async function handleMcpConnect(req, res, name) {
+  const s = settings.get();
+  const cfg = (s.mcpServers || []).find(t => t.name === name);
+  if (!cfg) return json(res, { error: `MCP 服务 ${name} 不存在` }, 404);
+  const result = await mcpManager.connectServer(cfg);
+  json(res, result, result.ok ? 200 : 500);
+}
+
+function handleMcpDisconnect(req, res, name) {
+  const result = mcpManager.disconnectServer(name);
+  json(res, result, result.ok ? 200 : 500);
+}
+
+function handleMcpConnections(req, res) {
+  json(res, { connections: mcpManager.getConnections() });
+}
+
+// ─── 路由：插件扫描 ─────────────────────────────────────────
+// GET /api/plugins — 扫描可用插件
+function handlePlugins(req, res) {
+  const pluginDirs = [
+    path.resolve(__dirname, '.opencode', 'plugins'),
+    path.resolve(require('os').homedir(), '.config', 'opencode', 'plugins'),
+  ];
+  const plugins = [];
+  for (const dir of pluginDirs) {
+    if (!fs.existsSync(dir)) continue;
+    try {
+      const items = fs.readdirSync(dir);
+      for (const item of items) {
+        if (item.endsWith('.js') || item.endsWith('.mjs')) {
+          plugins.push({ name: item.replace(/\.(js|mjs)$/, ''), file: item, path: path.join(dir, item) });
+        }
+      }
+    } catch {}
+  }
+  json(res, { plugins });
+}
+
+// ─── 路由：技能扫描 ─────────────────────────────────────────
+// GET /api/skills — 扫描可用技能
+function handleSkills(req, res) {
+  const skillDirs = [
+    path.resolve(require('os').homedir(), '.agents', 'skills'),
+  ];
+  const skills = [];
+  for (const dir of skillDirs) {
+    if (!fs.existsSync(dir)) continue;
+    try {
+      const items = fs.readdirSync(dir, { withFileTypes: true });
+      for (const item of items) {
+        if (item.isDirectory()) {
+          const skillFile = path.join(dir, item.name, 'SKILL.md');
+          if (fs.existsSync(skillFile)) {
+            skills.push({ name: item.name, path: skillFile });
+          }
+        }
+      }
+    } catch {}
+  }
+  json(res, { skills });
+}
+
+// GET /api/skills/:name — 获取技能内容
+function handleSkillByName(req, res, name) {
+  const dirs = [
+    path.resolve(require('os').homedir(), '.agents', 'skills', name),
+  ];
+  for (const dir of dirs) {
+    const skillFile = path.join(dir, 'SKILL.md');
+    if (fs.existsSync(skillFile)) {
+      try {
+        const content = fs.readFileSync(skillFile, 'utf-8');
+        json(res, { name, content });
+        return;
+      } catch {}
+    }
+  }
+  json(res, { error: `技能 ${name} 未找到` }, 404);
 }
 
 // ─── 路由：会话管理 ─────────────────────────────────────────
@@ -335,6 +549,11 @@ function handleRequest(req, res) {
 
   if (method === 'GET' && pathname === '/api/models') { handleModels(req, res); return; }
   if (method === 'GET' && pathname === '/api/tools') { handleTools(req, res); return; }
+  if (method === 'POST' && pathname === '/api/tools') { handleAddTool(req, res); return; }
+
+  const toolMatch = pathname.match(/^\/api\/tools\/([\w-]+)$/);
+  if (toolMatch) { handleToolByName(req, res, method, toolMatch[1]); return; }
+
   if (method === 'POST' && pathname === '/api/upload') { handleUpload(req, res); return; }
 
   if (pathname === '/api/knowledge' || pathname === '/api/knowledge/search') { handleKnowledge(req, res, method).catch(e => json(res, { error: e.message }, 500)); return; }
@@ -359,7 +578,27 @@ function handleRequest(req, res) {
   }
 
   if (pathname === "/api/settings") { handleSettings(req, res, method).catch(e => json(res, { error: e.message }, 500)); return; }
+  if (pathname === '/api/settings/prompt-templates') { handlePromptTemplates(req, res, method).catch(e => json(res, { error: e.message }, 500)); return; }
+  if (pathname === '/api/mcp/servers') { handleMcpServers(req, res, method).catch(e => json(res, { error: e.message }, 500)); return; }
+  if (pathname === '/api/mcp/connections') { if (method === 'GET') { handleMcpConnections(req, res); return; } }
+  if (pathname === '/api/plugins') { if (method === 'GET') { handlePlugins(req, res); return; } }
+  if (pathname === '/api/skills') { if (method === 'GET') { handleSkills(req, res); return; } }
   if (pathname === '/api/sessions') { handleSessions(req, res, method).catch(e => json(res, { error: e.message }, 500)); return; }
+
+  const ptDeleteMatch = pathname.match(/^\/api\/settings\/prompt-templates\/(.+)$/);
+  if (ptDeleteMatch) { handleDeletePromptTemplate(req, res, method, decodeURIComponent(ptDeleteMatch[1])); return; }
+
+  const mcpByNameMatch = pathname.match(/^\/api\/mcp\/servers\/([\w-]+)$/);
+  if (mcpByNameMatch) { handleMcpServerByName(req, res, method, mcpByNameMatch[1]); return; }
+
+  const mcpConnectMatch = pathname.match(/^\/api\/mcp\/servers\/([\w-]+)\/connect$/);
+  if (mcpConnectMatch && method === 'POST') { handleMcpConnect(req, res, mcpConnectMatch[1]).catch(e => json(res, { error: e.message }, 500)); return; }
+
+  const mcpDisconnectMatch = pathname.match(/^\/api\/mcp\/servers\/([\w-]+)\/disconnect$/);
+  if (mcpDisconnectMatch && method === 'POST') { handleMcpDisconnect(req, res, mcpDisconnectMatch[1]); return; }
+
+  const skillMatch = pathname.match(/^\/api\/skills\/([\w-]+)$/);
+  if (skillMatch) { handleSkillByName(req, res, skillMatch[1]); return; }
 
   const sessionMatch = pathname.match(/^\/api\/sessions\/([\w-]+)$/);
   if (sessionMatch) { handleSessionById(req, res, method, sessionMatch[1]).catch(e => json(res, { error: e.message }, 500)); return; }

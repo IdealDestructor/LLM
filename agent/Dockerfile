@@ -20,7 +20,7 @@ COPY package.json package-lock.json* ./
 RUN npm ci --omit=dev
  
 # 复制后端源码
-COPY config.js sessions.js tools.js agent.js server.js settings.js db.js embeddings.js redis.js knowledge.js vector-store.js vector-store-sqlite.js vector-store-qdrant.js ./
+COPY config.js sessions.js tools.js agent.js server.js settings.js db.js embeddings.js redis.js knowledge.js vector-store.js vector-store-sqlite.js vector-store-qdrant.js mcp-manager.js llm-client.js ./
 
 # 复制前端构建产物
 COPY --from=frontend-build /build/frontend/dist ./frontend/dist

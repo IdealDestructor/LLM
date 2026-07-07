@@ -35,16 +35,58 @@ function register(tool) {
   tools.set(tool.name, tool);
 }
 
+// ─── 运行时动态注册工具 ──────────────────────────────────
+// 支持无需重启添加/移除/更新工具
+
+function addTool(name, toolDef) {
+  if (!name || typeof name !== 'string') throw new Error('工具名称必须是字符串');
+  if (!toolDef || typeof toolDef.execute !== 'function') throw new Error('工具定义必须包含 execute 函数');
+  const tool = {
+    name,
+    description: toolDef.description || '',
+    parameters: toolDef.parameters || { type: 'object', properties: {} },
+    execute: toolDef.execute,
+  };
+  tools.set(name, tool);
+  return { ok: true, name };
+}
+
+function removeTool(name) {
+  if (!tools.has(name)) return { ok: false, error: `工具不存在: ${name}` };
+  tools.delete(name);
+  return { ok: true, name };
+}
+
+function updateTool(name, updates) {
+  if (!tools.has(name)) return { ok: false, error: `工具不存在: ${name}` };
+  const existing = tools.get(name);
+  if (updates.description !== undefined) existing.description = updates.description;
+  if (updates.parameters !== undefined) existing.parameters = updates.parameters;
+  if (updates.execute !== undefined) {
+    if (typeof updates.execute !== 'function') return { ok: false, error: 'execute 必须是函数' };
+    existing.execute = updates.execute;
+  }
+  return { ok: true, name, tool: { name: existing.name, description: existing.description, parameters: existing.parameters } };
+}
+
+function getTool(name) {
+  const tool = tools.get(name);
+  if (!tool) return null;
+  return { name: tool.name, description: tool.description, parameters: tool.parameters };
+}
+
 // ─── 获取所有工具的描述（供 LLM function calling 使用） ───
-function getDefinitions() {
-  return Array.from(tools.values()).map(t => ({
-    type: 'function',
-    function: {
-      name: t.name,
-      description: t.description,
-      parameters: t.parameters,
-    },
-  }));
+function getDefinitions(excludeNames = []) {
+  return Array.from(tools.values())
+    .filter(t => !excludeNames.includes(t.name))
+    .map(t => ({
+      type: 'function',
+      function: {
+        name: t.name,
+        description: t.description,
+        parameters: t.parameters,
+      },
+    }));
 }
 
 // ─── 获取所有工具的摘要（供前端展示） ────────────────────
@@ -162,6 +204,10 @@ register({
 
 module.exports = {
   register,
+  addTool,
+  removeTool,
+  updateTool,
+  getTool,
   getDefinitions,
   listTools,
   execute,
@@ -267,6 +313,10 @@ register({
 
 module.exports = {
   register,
+  addTool,
+  removeTool,
+  updateTool,
+  getTool,
   getDefinitions,
   listTools,
   execute,

@@ -27,6 +27,7 @@
 //
 
 const tools = require('./tools');
+const settings = require('./settings');
 
 const MAX_STEPS = 8; // 最大推理步数，防止无限循环
 
@@ -47,8 +48,10 @@ const MAX_STEPS = 8; // 最大推理步数，防止无限循环
 //                'error'       — 错误
 //
 async function runReactStream({ client, model, maxTokens, messages, onEvent }) {
-  // ── 构建工具定义 ──
-  const toolDefinitions = tools.getDefinitions();
+  // ── 构建工具定义（排除已禁用的工具） ──
+  const s = settings.get();
+  const disabledTools = s.disabledTools || [];
+  const toolDefinitions = tools.getDefinitions(disabledTools);
 
   // 工作消息历史（不修改原始 messages，用副本）
   const workingMessages = [...messages];
@@ -144,7 +147,9 @@ async function runReactStream({ client, model, maxTokens, messages, onEvent }) {
 // 与 runReactStream 类似，但最后一轮（LLM 不调用工具时）使用流式输出
 // 这样最终答案有打字机效果
 async function runReactStreamFinal({ client, model, maxTokens, messages, onEvent }) {
-  const toolDefinitions = tools.getDefinitions();
+  const s = settings.get();
+  const disabledTools = s.disabledTools || [];
+  const toolDefinitions = tools.getDefinitions(disabledTools);
   const workingMessages = [...messages];
 
   for (let step = 0; step < MAX_STEPS; step++) {

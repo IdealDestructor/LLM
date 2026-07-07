@@ -12,7 +12,7 @@ agent/
 ├── db.js              # SQLite 初始化（建表 + WAL 模式 + 连接管理）
 ├── sessions.js        # 会话管理（SQLite 持久化 + Redis 缓存 + 旧 JSON 迁移）
 ├── redis.js           # Redis 会话缓存（可选，cache-aside）
-├── settings.js        # 用户设置持久化（SQLite key-value）
+├── settings.js        # 用户设置持久化（SQLite key-value，含模板/MCP/工具开关）
 ├── embeddings.js      # 向量嵌入生成（OpenAI 兼容 API）
 ├── knowledge.js       # 知识库统一服务（元数据 SQLite + 向量存储）
 ├── vector-store.js    # 向量存储抽象层（sqlite | qdrant）
@@ -20,8 +20,9 @@ agent/
 ├── vector-store-qdrant.js   # Qdrant 专用向量库后端
 ├── tools.js           # 工具注册表 + 内置工具（calculator/datetime/search/knowledge）
 ├── agent.js           # ReAct 多步推理引擎（思考→行动→观察→…→最终答案）
+├── mcp-manager.js     # MCP 服务管理器（连接/断开/工具发现，支持 stdio + remote）
 ├── llm-client.js      # LLM 调用封装层（OpenAI SDK 兼容协议）
-├── server.js          # Node.js HTTP API 服务（会话 CRUD + 流式聊天 + Agent 推理）
+├── server.js          # Node.js HTTP API 服务（会话 CRUD + 流式聊天 + Agent + 设置管理）
 ├── .env               # 环境变量配置（API Key / Provider / Model）
 ├── data/agent.db      # SQLite 数据库（会话 / 消息 / 设置 / 知识库）
 ├── data/uploads/      # 图片上传目录（多模态）
@@ -34,8 +35,8 @@ agent/
 ├── .dockerignore      # Docker 构建排除文件
 └── frontend/          # React + Vite 聊天前端
     ├── src/
-    │   ├── App.jsx    # 主组件（侧边栏 + 模型选择 + Agent模式 + 推理步骤 + 流式渲染）
-    │   ├── App.css    # 界面样式（暗色模式 + 步骤卡片 + 动画）
+    │   ├── App.jsx    # 主组件（侧边栏 + 模型选择 + Agent模式 + 推理步骤 + 设置面板 6 标签页）
+    │   ├── App.css    # 界面样式（暗色模式 + 步骤卡片 + 设置面板扩展样式）
     │   ├── main.jsx   # React 入口
     │   └── index.css  # 全局样式变量
     ├── index.html
@@ -58,13 +59,13 @@ agent/
 │  │ 新建/切换  │  │ │ Agent 推理步骤卡片                 │ │   │
 │  │ /删除     │  │ │ 💭 思考 → 🔧 调用 → 👁 结果        │ │   │
 │  └──────────┘  │ ├───────────────────────────────────┤ │   │
-│                 │ │ 消息气泡 (Markdown 渲染)            │ │   │
-│                 │ │ 打字机光标 ▎                        │ │   │
-│                 │ └───────────────────────────────────┘ │   │
-│                 │ ┌───────────────────────────────────┐ │   │
-│                 │ │ [对话/Agent] [模型▼]  输入框 + 发送 │ │   │
-│                 │ └───────────────────────────────────┘ │   │
-│                 └─────────────────────────────────────────┘   │
+│  ┌──────────┐  │ │ 消息气泡 (Markdown 渲染)            │ │   │
+│  │ 设置面板  │  │ │ 打字机光标 ▎                        │ │   │
+│  │ 6 标签页  │  │ └───────────────────────────────────┘ │   │
+│  │ 通用/提示词│  │ ┌───────────────────────────────────┐ │   │
+│  │ 工具/MCP │  │ │ [对话/Agent] [模型▼]  输入框 + 发送 │ │   │
+│  │ 插件/技能 │  │ └───────────────────────────────────┘ │   │
+│  └──────────┘  └─────────────────────────────────────────┘   │
 └──────────────┬────────────────────────────────────────────────┘
                │ POST /api/chat/stream  — 普通流式聊天
                │ POST /api/chat/agent   — ReAct Agent 推理
@@ -73,6 +74,11 @@ agent/
                │ GET/PUT /api/settings
                │ GET/POST/DELETE /api/knowledge, POST /api/knowledge/search
                │ GET /api/models, /api/tools
+               │ POST/DELETE /api/tools/:name
+               │ GET/POST/DELETE /api/settings/prompt-templates
+               │ GET/POST/DELETE /api/mcp/servers
+               │ POST /api/mcp/servers/:name/connect|disconnect
+               │ GET /api/plugins, /api/skills
                ▼
 ┌───────────────────────────────────────────────────────────────┐
 │  server.js (port 3001)                                        │
@@ -81,27 +87,31 @@ agent/
 │  │ SQLite+Redis│  │ ReAct 循环   │  │ stream / tools      │ │
 │  │             │  │ Thought→Act  │  │ embeddings API      │ │
 │  └──────┬──────┘  │ →Obs→…→Ans  │  └─────────────────────┘ │
-│         │          └──────────────┘                           │
-│         ▼              │                                       │
-│  ┌─────────────┐       ▼                                       │
+│         │          └──────┬───────┘                           │
+│         ▼                 │                                    │
+│  ┌─────────────┐         ▼                                    │
 │  │   db.js     │  ┌─────────────┐  ┌─────────────┐            │
-│  │ agent.db    │  │   tools.js  │  │  redis.js   │            │
-│  │ WAL 模式    │  │ calculator  │  │ 会话缓存    │            │
-│  └─────────────┘  │ datetime    │  │ (可选)      │            │
-│                    │ search(RAG)│  └─────────────┘            │
-│                    │ knowledge_* │                             │
+│  │ agent.db    │  │   tools.js  │  │mcp-manager  │            │
+│  │ WAL 模式    │  │ calculator  │  │ 连接/断开   │            │
+│  └─────────────┘  │ datetime    │  │ 工具发现    │            │
+│                    │ search(RAG) │  │ stdio+remote│            │
+│                    │ knowledge_* │  └─────────────┘            │
+│                    │ addTool()   │                             │
+│                    │ removeTool()│                             │
+│                    │ updateTool()│                             │
+│                    │ 禁用工具过滤 │                              │
 │                    └─────────────┘                             │
 │         │              │                                       │
 │         ▼              ▼                                       │
 │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐            │
 │  │ settings.js │  │ knowledge.js│  │ vector-store│            │
-│  │ 用户设置    │  │ 知识库 CRUD │  │ sqlite/qdrant│           │
-│  └─────────────┘  └──────┬──────┘  └─────────────┘            │
-│                           │                                      │
-│                    ┌──────┴──────┐  ┌─────────────┐            │
-│                    │embeddings.js│  │ config.js   │            │
-│                    │ 向量嵌入    │  │ .env/模型   │            │
-│                    └─────────────┘  └─────────────┘            │
+│  │ theme       │  │ 知识库 CRUD │  │ sqlite/qdrant│           │
+│  │ systemPrompt│  └──────┬──────┘  └─────────────┘            │
+│  │ 模板列表    │         │                                      │
+│  │ mcpServers  │  ┌──────┴──────┐  ┌─────────────┐            │
+│  │ disabledTools│ │embeddings.js│  │ config.js   │            │
+│  │ 插件/技能   │  │ 向量嵌入    │  │ .env/模型   │            │
+│  └─────────────┘  └─────────────┘  └─────────────┘            │
 └───────────────────────────────────────────────────────────────┘
 ```
 
@@ -136,10 +146,14 @@ agent/
 - TTL 默认 24 小时（`REDIS_SESSION_TTL` 可配置）
 - 连接失败时自动降级，不影响 SQLite 读写
 
-#### `settings.js` — 用户设置持久化
+#### `settings.js` — 用户设置持久化（key-value 扩展）
 
 - SQLite `settings` 表（key-value），启动时自动从旧 `settings.json` 迁移
-- 默认项：`theme` / `systemPrompt` / `defaultAgentMode`
+- 核心设置：`theme` / `systemPrompt` / `defaultAgentMode` / `defaultMaxTokens`
+- 系统提示词模板：`systemPromptTemplates` 数组 `[{ name, content }]`，支持保存/应用/删除
+- 工具控制：`disabledTools` 数组，禁用的工具名列表，Agent 推理时自动过滤
+- MCP 配置：`mcpServers` 数组 `[{ name, type, command, args, url, enabled }]`
+- 插件/技能开关：`enabledPlugins` / `enabledSkills` 字符串数组
 - API：`load()` / `save(updates)` / `get()`
 
 #### `embeddings.js` — 向量嵌入生成
@@ -159,9 +173,9 @@ agent/
 - `VECTOR_STORE=qdrant`：Qdrant 专用向量库，HNSW 索引，适合大规模 RAG
 - 首次启用 Qdrant 时自动将 SQLite 已有向量迁移至 Qdrant
 
-#### `tools.js` — 工具注册表 + 内置工具
+#### `tools.js` — 工具注册表 + 运行时动态管理
 
-3 个内置工具，遵循 OpenAI function calling 的 JSON Schema 格式：
+5 个内置工具，遵循 OpenAI function calling 的 JSON Schema 格式：
 
 | 工具 | 用途 | 示例 |
 |------|------|------|
@@ -171,7 +185,23 @@ agent/
 | `knowledge_base_add` | 向知识库添加条目（自动生成向量） | Agent 自主写入新知识 |
 | `knowledge_base_remove` | 从知识库删除条目 | 按 ID 删除 |
 
-API：`register(tool)` / `getDefinitions()` / `execute(name, args)` / `listTools()`
+**运行时动态注册** — 支持无需重启添加/移除/更新工具：
+- `addTool(name, toolDef)` — 注册新工具（需提供 `execute` 函数）
+- `removeTool(name)` — 删除工具
+- `updateTool(name, updates)` — 部分更新（description / parameters / execute）
+- `getTool(name)` — 查询单个工具详情
+
+**禁用工具过滤** — `getDefinitions(excludeNames)` 接受禁用的工具名数组，被禁用的工具不会出现在 LLM function calling 的 `tools` 参数中。
+
+**MCP 工具集成** — MCP 服务连接后自动注册为 `mcp_{server}_{toolname}` 格式的工具。
+
+#### `mcp-manager.js` — MCP 服务管理器
+
+- 支持两种 MCP 服务类型：`stdio`（本地进程，JSON-RPC over stdin/stdout）和 `remote`（HTTP POST）
+- 连接流程：创建传输层 → 发送 `initialize` 握手 → 调用 `tools/list` 发现工具 → 自动注册为 `mcp_{server}_{name}`
+- 工具调用：通过 `tools/call` 方法转发参数和结果
+- 断开时自动终止进程、注销所有关联工具
+- API：`connectServer(config)` / `disconnectServer(name)` / `getConnections()`
 
 #### `agent.js` — ReAct 多步推理引擎
 
@@ -197,14 +227,26 @@ API：`register(tool)` / `getDefinitions()` / `execute(name, args)` / `listTools
 |------|------|------|
 | GET | `/api/models` | 获取可选模型列表 |
 | GET | `/api/tools` | 获取可用工具列表 |
+| POST | `/api/tools` | 注册自定义工具（`{ name, description, parameters, execute }`） |
+| GET/DELETE | `/api/tools/:name` | 获取 / 删除单个工具 |
+| PATCH | `/api/tools/:name` | 更新工具属性 |
 | GET/PUT | `/api/settings` | 获取 / 更新用户设置 |
+| GET/POST | `/api/settings/prompt-templates` | 列出 / 添加提示词模板 |
+| DELETE | `/api/settings/prompt-templates/:name` | 删除提示词模板 |
+| GET/POST/DELETE | `/api/mcp/servers` | MCP 服务配置 CRUD |
+| POST | `/api/mcp/servers/:name/connect` | 连接 MCP 服务并自动发现工具 |
+| POST | `/api/mcp/servers/:name/disconnect` | 断开 MCP 服务并移除工具 |
+| GET | `/api/mcp/connections` | 当前 MCP 连接状态 |
+| GET | `/api/plugins` | 扫描可用插件（`.opencode/plugins/` + `~/.config/opencode/plugins/`） |
+| GET | `/api/skills` | 扫描可用技能（`~/.agents/skills/`） |
+| GET | `/api/skills/:name` | 获取技能文件内容（SKILL.md） |
 | GET/POST/DELETE | `/api/knowledge` | 知识库 CRUD（POST 自动生成向量嵌入） |
 | POST | `/api/knowledge/search` | 语义搜索知识库（body: `{ query, topK }`） |
 | POST | `/api/upload` | 图片上传（base64 → 保存到 `data/uploads/`） |
 | GET | `/api/uploads/:file` | 获取上传的图片文件 |
 | POST | `/api/sessions` | 创建会话 |
 | GET | `/api/sessions` | 列出所有会话摘要 |
-| GET | `/api/sessions/:id` | 获取会话详情 |
+| GET | `/api/sessions/:id` | 获取会话详情（含消息历史） |
 | PATCH | `/api/sessions/:id` | 更新会话标题 |
 | DELETE | `/api/sessions/:id` | 删除会话 |
 | POST | `/api/chat/stream` | SSE 流式聊天（需 `sessionId`） |
@@ -218,12 +260,19 @@ API：`register(tool)` / `getDefinitions()` / `execute(name, args)` / `listTools
 - **React 19** + **Vite 8**
 - **模式切换**：顶栏「对话 / Agent」按钮，切换普通聊天和 Agent 推理
 - **模型选择**：下拉选择器，切换模型时自动更新 maxTokens
-- **侧边栏**：会话列表，新建 / 切换 / 删除，可折叠
+- **侧边栏**：会话列表，新建 / 切换 / 删除，可折叠，底部主题切换 + 设置入口
 - **推理步骤卡片**：Agent 模式下展示 💭 思考 / 🔧 调用 / 👁 结果
 - **消息区**：Markdown 渲染（粗体/斜体/行内代码/代码块），打字机光标，思考中三点动画
 - **输入区**：自动调高 textarea，Enter 发送 / Shift+Enter 换行
-- **暗色模式**：自动跟随 `prefers-color-scheme: dark`
+- **暗色模式**：自动跟随 `prefers-color-scheme: dark`，支持强制 light/dark 切换
 - **多模态图片**：上传按钮 + 剪贴板粘贴，预览缩略图（最多 4 张），消息气泡内展示图片
+- **设置面板**（6 标签页）：
+  - **通用** — 默认模式（对话/Agent），默认最大 Token
+  - **提示词** — System Prompt 编辑器，模板保存/应用/删除
+  - **工具** — 内置工具启用/禁用，自定义工具添加/删除
+  - **MCP** — MCP 服务配置 CRUD，连接/断开控制，连接状态显示
+  - **插件** — 扫描并列出可用插件（`.opencode/plugins/`）
+  - **技能** — 扫描并列出可用技能（`~/.agents/skills/`），查看 SKILL.md 内容
 - **生产部署**：Vite 构建后由后端同端口托管，无需独立前端服务器
 
 ---
@@ -264,6 +313,45 @@ API：`register(tool)` / `getDefinitions()` / `execute(name, args)` / `listTools
 - **后端切换**：`VECTOR_STORE=sqlite|qdrant`，Docker Compose 默认启用 Qdrant
 - **Agent 集成**：`search` 工具优先走向量搜索，失败或空库时回退内置知识
 - **维度配置**：`EMBEDDING_DIMENSION` 须与嵌入模型一致（智谱 embedding-3: 2048，OpenAI text-embedding-3-small: 1536）
+
+### 工具动态注册 + 禁用过滤
+
+**动态注册**（`tools.js`）：
+- `addTool(name, toolDef)` 接受 `{ description, parameters, execute }`，写入 `Map`
+- `removeTool(name)` 从 `Map` 删除
+- `updateTool(name, updates)` 支持部分更新 description / parameters / execute
+- 所有新增/删除/更新即时生效，Agent 下一轮推理即可调用新工具
+
+**禁用过滤**（`agent.js` + `tools.js`）：
+- `settings.disabledTools` 数组存储禁用的工具名列表
+- `agent.js` 调用 `getDefinitions(excludeNames)` 时传入禁用列表
+- 被禁用的工具不进入 `tools` 参数，LLM 将完全不知道其存在
+
+### MCP 协议集成
+
+**协议实现**（`mcp-manager.js`）：
+- 基于 JSON-RPC 2.0 的 MCP 客户端实现
+- 支持 `stdio`（子进程 stdin/stdout）和 `remote`（HTTP POST）两种传输层
+- 连接握手：`initialize` → `notifications/initialized`
+- 工具发现：`tools/list` → 解析 `inputSchema` → 注册为 `mcp_{server}_{toolname}` 格式
+- 工具调用：`tools/call` → 转发参数 → 返回结果文本
+
+**生命周期管理**：
+- `connectServer(config)`：创建传输层 → 握手 → 发现工具 → 注册
+- `disconnectServer(name)`：终止进程 → 从注册表移除所有关联工具
+- 进程退出时自动清理（`proc.on('exit')` 钩子）
+- 连接超时：MCP 请求 10 秒超时保护
+
+### 系统提示词模板
+
+**存储**（`settings.js`）：
+- `systemPromptTemplates` 数组 `[{ name: string, content: string }]`
+- 与主设置一起持久化到 SQLite
+
+**前端操作**（`App.jsx`）：
+- 当前提示词可「保存为模板」或「更新模板」
+- 点击模板名称应用其内容到编辑器
+- 模板列表显示名称 + 内容预览（前 60 字符）
 
 ### max_tokens 参数化 + 模型选择
 
@@ -421,7 +509,7 @@ node llm-client.js    # LLM 客户端连通性测试
 - [x] **System Prompt 配置**：设置面板 + `settings.js` SQLite 持久化
 - [ ] **错误处理增强**：API 限流 / 超时 / Key 失效等场景的友好提示
 - [ ] **更多内置工具**：网页抓取、代码执行、文件读写等
-- [ ] **工具动态注册**：支持运行时添加/移除工具，无需重启
+- [x] **工具动态注册**：支持运行时添加/移除/更新工具，无需重启
 
 ### P2 — Agent 能力扩展
 
