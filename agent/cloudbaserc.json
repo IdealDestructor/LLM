@@ -1,6 +1,0 @@
-{
-  "envId": "dev-d6glr37fr08166648",
-  "cloudrun": {
-    "name": "llm-agent"
-  }
-}
