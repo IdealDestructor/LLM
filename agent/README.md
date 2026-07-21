@@ -18,7 +18,7 @@ agent/
 ├── vector-store.js    # 向量存储抽象层（sqlite | qdrant）
 ├── vector-store-sqlite.js   # SQLite BLOB 后端（默认）
 ├── vector-store-qdrant.js   # Qdrant 专用向量库后端
-├── tools.js           # 工具注册表 + 内置工具（calculator/datetime/search/knowledge）
+├── tools.js           # 工具注册表 + 9 个内置工具（calculator/datetime/search/knowledge/fetch/execute_code/read_file/write_file）
 ├── agent.js           # ReAct 多步推理引擎（思考→行动→观察→…→最终答案）
 ├── mcp-manager.js     # MCP 服务管理器（连接/断开/工具发现，支持 stdio + remote）
 ├── llm-client.js      # LLM 调用封装层（OpenAI SDK 兼容协议）
@@ -175,7 +175,7 @@ agent/
 
 #### `tools.js` — 工具注册表 + 运行时动态管理
 
-5 个内置工具，遵循 OpenAI function calling 的 JSON Schema 格式：
+9 个内置工具，遵循 OpenAI function calling 的 JSON Schema 格式：
 
 | 工具 | 用途 | 示例 |
 |------|------|------|
@@ -184,6 +184,10 @@ agent/
 | `search` | 知识库语义搜索（向量 + 回退内置知识） | `react 组件怎么用` → 相关条目 |
 | `knowledge_base_add` | 向知识库添加条目（自动生成向量） | Agent 自主写入新知识 |
 | `knowledge_base_remove` | 从知识库删除条目 | 按 ID 删除 |
+| `fetch` | 网页抓取（HTTP GET） | `https://example.com` → 页面内容 |
+| `execute_code` | 执行代码（JavaScript / Python） | `console.log("hello")` → 输出结果 |
+| `read_file` | 读取项目目录内的文本文件 | `tools.js` → 文件内容 |
+| `write_file` | 向 data/ 目录写入文件 | `report.md` + 内容 → 文件已写入 |
 
 **运行时动态注册** — 支持无需重启添加/移除/更新工具：
 - `addTool(name, toolDef)` — 注册新工具（需提供 `execute` 函数）
@@ -192,6 +196,19 @@ agent/
 - `getTool(name)` — 查询单个工具详情
 
 **禁用工具过滤** — `getDefinitions(excludeNames)` 接受禁用的工具名数组，被禁用的工具不会出现在 LLM function calling 的 `tools` 参数中。
+
+#### 新增内置工具实现（v2）
+
+**`fetch` 网页抓取** — 使用 Node.js 原生 `fetch`（Node 18+ 内置），支持 HTTP/HTTPS，15 秒超时（`AbortController`），响应大小限制 1MB，返回前 50000 字符。设置 `User-Agent` 头模拟浏览器请求。
+
+**`execute_code` 代码执行** — 双语言沙箱：
+- **JavaScript**：`vm.Script` + `vm.createContext` 隔离执行，注入受限全局对象（Math/JSON/Date 等不含 `require`/`process`/`fs`），捕获 `console.log` 输出，10 秒超时
+- **Python**：`child_process.execFile` 调用 `python3`，写入临时 `.py` 文件执行，自动清理，10 秒超时，1MB 输出上限
+- 两种语言均限制代码长度 10000 字符
+
+**`read_file` / `write_file` 文件读写**：
+- `read_file`：基于 `__dirname` 路径白名单，阻止路径穿越（`path.resolve` + `startsWith` 校验），禁止二进制文件、1MB 大小限制
+- `write_file`：仅允许写入 `data/` 子目录，自动创建中间目录，1MB 大小限制
 
 **MCP 工具集成** — MCP 服务连接后自动注册为 `mcp_{server}_{toolname}` 格式的工具。
 
@@ -508,7 +525,7 @@ node llm-client.js    # LLM 客户端连通性测试
 
 - [x] **System Prompt 配置**：设置面板 + `settings.js` SQLite 持久化
 - [ ] **错误处理增强**：API 限流 / 超时 / Key 失效等场景的友好提示
-- [ ] **更多内置工具**：网页抓取、代码执行、文件读写等
+- [x] **更多内置工具**：网页抓取（`fetch`）、代码执行（`execute_code`）、文件读写（`read_file` / `write_file`）
 - [x] **工具动态注册**：支持运行时添加/移除/更新工具，无需重启
 
 ### P2 — Agent 能力扩展

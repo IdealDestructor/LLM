@@ -94,4 +94,7 @@ module.exports = {
   // 向量维度须与嵌入模型一致（智谱 embedding-3: 2048，OpenAI text-embedding-3-small: 1536）
   embeddingDimension: parseInt(process.env.EMBEDDING_DIMENSION, 10) || 2048,
   searchScoreThreshold: parseFloat(process.env.SEARCH_SCORE_THRESHOLD) || 0.3,
+
+  // 访问密码（默认 8888）
+  accessPassword: process.env.ACCESS_PASSWORD || '8888',
 };

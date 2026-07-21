@@ -311,6 +311,199 @@ register({
   },
 });
 
+// ─── fetch：网页抓取 ────────────────────────────────────────
+register({
+  name: 'fetch',
+  description: '抓取指定 URL 的网页内容，返回 HTML 或纯文本。用于获取在线文档、API 响应等。',
+  parameters: {
+    type: 'object',
+    properties: {
+      url: {
+        type: 'string',
+        description: '要抓取的网页 URL（必须以 http:// 或 https:// 开头）',
+      },
+      timeout: {
+        type: 'integer',
+        description: '超时时间（毫秒），默认 15000',
+      },
+      responseType: {
+        type: 'string',
+        enum: ['text', 'html'],
+        description: '返回格式：text（纯文本）或 html（原始 HTML），默认 text',
+      },
+    },
+    required: ['url'],
+  },
+  execute: async ({ url, timeout = 15000 }) => {
+    if (!url.startsWith('http://') && !url.startsWith('https://')) {
+      throw new Error('URL 必须以 http:// 或 https:// 开头');
+    }
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeout);
+    try {
+      const response = await fetch(url, {
+        signal: controller.signal,
+        headers: { 'User-Agent': 'LLM-Agent/1.0' },
+      });
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+      const text = await response.text();
+      if (text.length > 1024 * 1024) {
+        throw new Error('响应内容超过 1MB 限制，请尝试更具体的 URL');
+      }
+      return text.slice(0, 50000);
+    } finally {
+      clearTimeout(timer);
+    }
+  },
+});
+
+// ─── execute_code：代码执行 ──────────────────────────────────
+register({
+  name: 'execute_code',
+  description: '执行代码片段并返回执行结果。支持 JavaScript 和 Python。适用于快速验证算法、处理数据、自动化任务等。',
+  parameters: {
+    type: 'object',
+    properties: {
+      language: {
+        type: 'string',
+        enum: ['javascript', 'python'],
+        description: '代码语言：javascript 或 python',
+      },
+      code: {
+        type: 'string',
+        description: '要执行的代码内容',
+      },
+      timeout: {
+        type: 'integer',
+        description: '执行超时时间（毫秒），默认 10000',
+      },
+    },
+    required: ['language', 'code'],
+  },
+  execute: async ({ language, code, timeout = 10000 }) => {
+    if (!code || typeof code !== 'string') throw new Error('code 参数必填');
+    if (code.length > 10000) throw new Error('代码长度超过 10000 字符限制');
+
+    if (language === 'javascript') {
+      const vm = require('vm');
+      const sandbox = {
+        console: { log: (...args) => { logs.push(args.map(String).join(' ')); } },
+        setTimeout, clearTimeout, Math, JSON, Date, parseInt, parseFloat,
+        isNaN, isFinite, Array, Object, String, Number, Boolean, RegExp,
+        Map, Set, Promise, Error, RangeError, TypeError, SyntaxError, ReferenceError,
+      };
+      const logs = [];
+      const context = vm.createContext(sandbox);
+      const script = new vm.Script(code, { timeout });
+      const result = script.runInContext(context, { timeout });
+      const output = logs.join('\n');
+      return output ? `${output}\n${String(result ?? 'undefined')}` : String(result ?? 'undefined');
+    }
+
+    if (language === 'python') {
+      const { execFile } = require('child_process');
+      const tmpFile = `${__dirname}/data/tmp_${Date.now()}_${Math.random().toString(36).slice(2, 8)}.py`;
+      require('fs').writeFileSync(tmpFile, code);
+      try {
+        const result = await new Promise((resolve, reject) => {
+          const child = execFile('python3', [tmpFile], { timeout, maxBuffer: 1024 * 1024 }, (err, stdout, stderr) => {
+            if (err) {
+              if (err.killed) reject(new Error('执行超时'));
+              else reject(new Error(stderr || err.message));
+            } else resolve(stdout);
+          });
+        });
+        return result || '(无输出)';
+      } finally {
+        try { require('fs').unlinkSync(tmpFile); } catch {}
+      }
+    }
+
+    throw new Error(`不支持的语言: ${language}，仅支持 javascript 和 python`);
+  },
+});
+
+// ─── read_file：读取文件 ────────────────────────────────────
+register({
+  name: 'read_file',
+  description: '读取项目目录内的文件内容（文本文件）。路径相对于 agent/ 项目根目录。',
+  parameters: {
+    type: 'object',
+    properties: {
+      path: {
+        type: 'string',
+        description: '文件路径（相对于 agent/ 项目目录），如 "tools.js"、"README.md"',
+      },
+    },
+    required: ['path'],
+  },
+  execute: async ({ path: filePath }) => {
+    const fs = require('fs');
+    const pathMod = require('path');
+    const projectRoot = pathMod.resolve(__dirname);
+    const resolved = pathMod.resolve(projectRoot, filePath);
+    if (!resolved.startsWith(projectRoot)) {
+      throw new Error('不允许读取项目目录之外的文件');
+    }
+    if (!fs.existsSync(resolved)) {
+      throw new Error(`文件不存在: ${filePath}`);
+    }
+    const stat = fs.statSync(resolved);
+    if (!stat.isFile()) {
+      throw new Error(`路径不是文件: ${filePath}`);
+    }
+    if (stat.size > 1024 * 1024) {
+      throw new Error('文件超过 1MB 限制');
+    }
+    const isBinary = ['.db', '.sqlite', '.png', '.jpg', '.jpeg', '.gif', '.ico', '.woff', '.woff2', '.eot', '.ttf']
+      .includes(pathMod.extname(filePath).toLowerCase());
+    if (isBinary) {
+      throw new Error('不支持读取二进制文件');
+    }
+    return fs.readFileSync(resolved, 'utf-8');
+  },
+});
+
+// ─── write_file：写入文件 ───────────────────────────────────
+register({
+  name: 'write_file',
+  description: '向项目 data/ 目录写入文件内容。用于保存 Agent 生成的报告、数据文件等。',
+  parameters: {
+    type: 'object',
+    properties: {
+      path: {
+        type: 'string',
+        description: '文件路径（相对于 data/ 子目录），如 "report.md"、"output/data.json"',
+      },
+      content: {
+        type: 'string',
+        description: '文件内容',
+      },
+    },
+    required: ['path', 'content'],
+  },
+  execute: async ({ path: filePath, content }) => {
+    const fs = require('fs');
+    const pathMod = require('path');
+    const dataDir = pathMod.resolve(__dirname, 'data');
+    const resolved = pathMod.resolve(dataDir, filePath);
+    if (!resolved.startsWith(dataDir)) {
+      throw new Error('不允许写入项目 data/ 目录之外的文件');
+    }
+    if (content.length > 1024 * 1024) {
+      throw new Error('内容超过 1MB 限制');
+    }
+    const dir = pathMod.dirname(resolved);
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+    fs.writeFileSync(resolved, content, 'utf-8');
+    return `文件已写入: data/${filePath} (${content.length} 字符)`;
+  },
+});
+
 module.exports = {
   register,
   addTool,

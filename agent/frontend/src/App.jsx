@@ -30,7 +30,41 @@ function renderSteps(steps) {
 }
 
 function App() {
-  const [sessionList, setSessionList] = useState([])
+  // ─── 访问密码认证 ────────────────────────────────────────
+  const [password, setPassword] = useState(() => localStorage.getItem('__auth_token') || '')
+  const [authenticated, setAuthenticated] = useState(() => !!localStorage.getItem('__auth_token'))
+  const [loginInput, setLoginInput] = useState('')
+  const [loginError, setLoginError] = useState('')
+  const [loginLoading, setLoginLoading] = useState(false)
+
+  const apiFetch = (url, options = {}) => {
+    const headers = { ...options.headers, 'Authorization': `Bearer ${password}` }
+    return fetch(url, { ...options, headers })
+  }
+
+  const handleLogin = async () => {
+    if (!loginInput.trim()) return
+    setLoginLoading(true)
+    setLoginError('')
+    try {
+      const r = await fetch(`${API}/api/auth/verify`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: loginInput.trim() })
+      })
+      const d = await r.json()
+      if (d.success) {
+        setPassword(loginInput.trim())
+        setAuthenticated(true)
+        localStorage.setItem('__auth_token', loginInput.trim())
+      } else {
+        setLoginError(d.error || '密码错误')
+      }
+    } catch {
+      setLoginError('网络错误，请重试')
+    }
+    setLoginLoading(false)
+  }
   const [activeSessionId, setActiveSessionId] = useState(null)
   const [messages, setMessages] = useState([])
   const [input, setInput] = useState('')
@@ -73,40 +107,40 @@ function App() {
   const [skillContent, setSkillContent] = useState('')
 
   // ─── 数据加载 ──────────────────────────────────────────
-  useEffect(() => { (async () => { try { const [mr, sr] = await Promise.all([fetch(`${API}/api/models`), fetch(`${API}/api/sessions`)]); const md = await mr.json(), sd = await sr.json(); setModelList(md.models); setSelectedModel(md.defaultModel); setSelectedMaxTokens(md.models.find(m => m.id === md.defaultModel)?.maxTokens || md.defaultMaxTokens); setSessionList(sd.sessions); if (sd.sessions.length > 0) await switchToSession(sd.sessions[0].id); else await createNewSession() } catch (e) { console.error(e) } })() }, [])
+  useEffect(() => { (async () => { try { const [mr, sr] = await Promise.all([apiFetch(`${API}/api/models`), apiFetch(`${API}/api/sessions`)]); const md = await mr.json(), sd = await sr.json(); setModelList(md.models); setSelectedModel(md.defaultModel); setSelectedMaxTokens(md.models.find(m => m.id === md.defaultModel)?.maxTokens || md.defaultMaxTokens); setSessionList(sd.sessions); if (sd.sessions.length > 0) await switchToSession(sd.sessions[0].id); else await createNewSession() } catch (e) { console.error(e) } })() }, [])
 
-  useEffect(() => { (async () => { try { const r = await fetch(`${API}/api/settings`); const d = await r.json(); if (d.theme) setTheme(d.theme); if (d.systemPrompt) setSystemPrompt(d.systemPrompt); if (d.defaultAgentMode) setDefaultAgentMode(d.defaultAgentMode); if (d.defaultMaxTokens) setDefaultMaxTokens(d.defaultMaxTokens); if (d.disabledTools) setDisabledTools(d.disabledTools); if (d.systemPromptTemplates) setPromptTemplates(d.systemPromptTemplates) } catch (e) { console.error(e) } })() }, [])
+  useEffect(() => { (async () => { try { const r = await apiFetch(`${API}/api/settings`); const d = await r.json(); if (d.theme) setTheme(d.theme); if (d.systemPrompt) setSystemPrompt(d.systemPrompt); if (d.defaultAgentMode) setDefaultAgentMode(d.defaultAgentMode); if (d.defaultMaxTokens) setDefaultMaxTokens(d.defaultMaxTokens); if (d.disabledTools) setDisabledTools(d.disabledTools); if (d.systemPromptTemplates) setPromptTemplates(d.systemPromptTemplates) } catch (e) { console.error(e) } })() }, [])
 
   useEffect(() => { document.documentElement.setAttribute('data-theme', theme) }, [theme])
 
-  const cycleTheme = () => { const next = { auto: 'light', light: 'dark', dark: 'auto' }; const nt = next[theme] || 'auto'; setTheme(nt); fetch(`${API}/api/settings`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ theme: nt }) }).catch(() => {}) }
+  const cycleTheme = () => { const next = { auto: 'light', light: 'dark', dark: 'auto' }; const nt = next[theme] || 'auto'; setTheme(nt); apiFetch(`${API}/api/settings`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ theme: nt }) }).catch(() => {}) }
 
-  const saveSettings = async (extra = {}) => { try { await fetch(`${API}/api/settings`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ systemPrompt, defaultAgentMode, defaultMaxTokens, disabledTools, systemPromptTemplates: promptTemplates, ...extra }) }); setSettingsOpen(false) } catch (e) { console.error(e) } }
+  const saveSettings = async (extra = {}) => { try { await apiFetch(`${API}/api/settings`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ systemPrompt, defaultAgentMode, defaultMaxTokens, disabledTools, systemPromptTemplates: promptTemplates, ...extra }) }); setSettingsOpen(false) } catch (e) { console.error(e) } }
 
   // ─── 工具管理 ──────────────────────────────────────────
-  const loadTools = async () => { try { const r = await fetch(`${API}/api/tools`); const d = await r.json(); setToolList(d.tools || []) } catch {} }
+  const loadTools = async () => { try { const r = await apiFetch(`${API}/api/tools`); const d = await r.json(); setToolList(d.tools || []) } catch {} }
   useEffect(() => { if (settingsOpen) loadTools() }, [settingsOpen])
 
   const toggleTool = (name) => {
     setDisabledTools(prev => prev.includes(name) ? prev.filter(n => n !== name) : [...prev, name])
   }
 
-  const addCustomTool = async () => { try { await fetch(`${API}/api/tools`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(newToolForm) }); setNewToolForm({ name: '', description: '', execute: '' }); loadTools() } catch (e) { alert(e.message) } }
-  const removeTool = async (name) => { try { await fetch(`${API}/api/tools/${name}`, { method: 'DELETE' }); loadTools() } catch {} }
+  const addCustomTool = async () => { try { await apiFetch(`${API}/api/tools`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(newToolForm) }); setNewToolForm({ name: '', description: '', execute: '' }); loadTools() } catch (e) { alert(e.message) } }
+  const removeTool = async (name) => { try { await apiFetch(`${API}/api/tools/${name}`, { method: 'DELETE' }); loadTools() } catch {} }
 
   // ─── MCP 服务管理 ──────────────────────────────────────
-  const loadMcpServers = async () => { try { const [sr, cr] = await Promise.all([fetch(`${API}/api/mcp/servers`), fetch(`${API}/api/mcp/connections`)]); const sd = await sr.json(), cd = await cr.json(); setMcpServers(sd.servers || []); setMcpConnections(cd.connections || []) } catch {} }
+  const loadMcpServers = async () => { try { const [sr, cr] = await Promise.all([apiFetch(`${API}/api/mcp/servers`), apiFetch(`${API}/api/mcp/connections`)]); const sd = await sr.json(), cd = await cr.json(); setMcpServers(sd.servers || []); setMcpConnections(cd.connections || []) } catch {} }
   useEffect(() => { if (settingsOpen) loadMcpServers() }, [settingsOpen])
 
-  const saveMcpServer = async () => { try { await fetch(`${API}/api/mcp/servers`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(mcpForm) }); setMcpForm({ name: '', type: 'stdio', command: '', args: '', url: '' }); loadMcpServers() } catch (e) { alert(e.message) } }
-  const deleteMcpServer = async (name) => { try { await fetch(`${API}/api/mcp/servers/${name}`, { method: 'DELETE' }); loadMcpServers() } catch {} }
-  const connectMcp = async (name) => { try { await fetch(`${API}/api/mcp/servers/${name}/connect`, { method: 'POST' }); loadMcpServers() } catch {} }
-  const disconnectMcp = async (name) => { try { await fetch(`${API}/api/mcp/servers/${name}/disconnect`, { method: 'POST' }); loadMcpServers() } catch {} }
+  const saveMcpServer = async () => { try { await apiFetch(`${API}/api/mcp/servers`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(mcpForm) }); setMcpForm({ name: '', type: 'stdio', command: '', args: '', url: '' }); loadMcpServers() } catch (e) { alert(e.message) } }
+  const deleteMcpServer = async (name) => { try { await apiFetch(`${API}/api/mcp/servers/${name}`, { method: 'DELETE' }); loadMcpServers() } catch {} }
+  const connectMcp = async (name) => { try { await apiFetch(`${API}/api/mcp/servers/${name}/connect`, { method: 'POST' }); loadMcpServers() } catch {} }
+  const disconnectMcp = async (name) => { try { await apiFetch(`${API}/api/mcp/servers/${name}/disconnect`, { method: 'POST' }); loadMcpServers() } catch {} }
 
   // ─── 插件 & 技能 ──────────────────────────────────────
-  const loadPlugins = async () => { try { const r = await fetch(`${API}/api/plugins`); const d = await r.json(); setPlugins(d.plugins || []) } catch {} }
-  const loadSkills = async () => { try { const r = await fetch(`${API}/api/skills`); const d = await r.json(); setSkills(d.skills || []) } catch {} }
-  const loadSkillContent = async (name) => { try { const r = await fetch(`${API}/api/skills/${name}`); const d = await r.json(); setSkillContent(d.content || '') } catch {} }
+  const loadPlugins = async () => { try { const r = await apiFetch(`${API}/api/plugins`); const d = await r.json(); setPlugins(d.plugins || []) } catch {} }
+  const loadSkills = async () => { try { const r = await apiFetch(`${API}/api/skills`); const d = await r.json(); setSkills(d.skills || []) } catch {} }
+  const loadSkillContent = async (name) => { try { const r = await apiFetch(`${API}/api/skills/${name}`); const d = await r.json(); setSkillContent(d.content || '') } catch {} }
   useEffect(() => { if (settingsOpen && settingsTab === 'plugins') loadPlugins() }, [settingsOpen, settingsTab])
   useEffect(() => { if (settingsOpen && settingsTab === 'skills') loadSkills() }, [settingsOpen, settingsTab])
 
@@ -184,10 +218,10 @@ function App() {
     return ''
   }
 
-  const createNewSession = async () => { try { const r = await fetch(`${API}/api/sessions`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title: '新对话' }) }); const d = await r.json(); setActiveSessionId(d.sessionId); setMessages([{ role: 'assistant', content: '你好！我是 AI 助手，有什么可以帮助你的吗？', streaming: false, steps: [] }]); await refreshSessionList() } catch (e) { console.error(e) } }
-  const switchToSession = async (sid) => { if (sid === activeSessionId) return; try { const r = await fetch(`${API}/api/sessions/${sid}`); const d = await r.json(); setActiveSessionId(sid); const l = d.messages.map(m => ({ ...m, streaming: false, steps: [] })); setMessages(l.length === 0 ? [{ role: 'assistant', content: '你好！我是 AI 助手，有什么可以帮助你的吗？', streaming: false, steps: [] }] : l) } catch (e) { console.error(e) } }
-  const deleteSession = async (sid, e) => { e.stopPropagation(); try { await fetch(`${API}/api/sessions/${sid}`, { method: 'DELETE' }); await refreshSessionList(); if (sid === activeSessionId) { const r = await fetch(`${API}/api/sessions`); const d = await r.json(); if (d.sessions.length > 0) await switchToSession(d.sessions[0].id); else await createNewSession() } } catch (e) { console.error(e) } }
-  const refreshSessionList = async () => { const r = await fetch(`${API}/api/sessions`); const d = await r.json(); setSessionList(d.sessions) }
+  const createNewSession = async () => { try { const r = await apiFetch(`${API}/api/sessions`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title: '新对话' }) }); const d = await r.json(); setActiveSessionId(d.sessionId); setMessages([{ role: 'assistant', content: '你好！我是 AI 助手，有什么可以帮助你的吗？', streaming: false, steps: [] }]); await refreshSessionList() } catch (e) { console.error(e) } }
+  const switchToSession = async (sid) => { if (sid === activeSessionId) return; try { const r = await apiFetch(`${API}/api/sessions/${sid}`); const d = await r.json(); setActiveSessionId(sid); const l = d.messages.map(m => ({ ...m, streaming: false, steps: [] })); setMessages(l.length === 0 ? [{ role: 'assistant', content: '你好！我是 AI 助手，有什么可以帮助你的吗？', streaming: false, steps: [] }] : l) } catch (e) { console.error(e) } }
+  const deleteSession = async (sid, e) => { e.stopPropagation(); try { await apiFetch(`${API}/api/sessions/${sid}`, { method: 'DELETE' }); await refreshSessionList(); if (sid === activeSessionId) { const r = await apiFetch(`${API}/api/sessions`); const d = await r.json(); if (d.sessions.length > 0) await switchToSession(d.sessions[0].id); else await createNewSession() } } catch (e) { console.error(e) } }
+  const refreshSessionList = async () => { const r = await apiFetch(`${API}/api/sessions`); const d = await r.json(); setSessionList(d.sessions) }
   useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [messages])
   const adjustH = useCallback(() => { const el = textareaRef.current; if (!el) return; el.style.height = 'auto'; el.style.height = Math.min(el.scrollHeight, 160) + 'px' }, [])
   useEffect(() => { adjustH() }, [input, adjustH])
@@ -200,7 +234,7 @@ function App() {
     setMessages(p => [...p, { role: 'assistant', content: '', streaming: true, steps: [] }])
     const ep = agentMode === 'agent' ? '/api/chat/agent' : '/api/chat/stream'
     try {
-      const resp = await fetch(`${API}${ep}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message: um, sessionId: activeSessionId, model: selectedModel, maxTokens: selectedMaxTokens, images: imgs.map(i => i.dataUrl) }) })
+      const resp = await apiFetch(`${API}${ep}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message: um, sessionId: activeSessionId, model: selectedModel, maxTokens: selectedMaxTokens, images: imgs.map(i => i.dataUrl) }) })
       if (!resp.body) throw new Error('No ReadableStream')
       const reader = resp.body.getReader(), decoder = new TextDecoder('utf-8')
       let buf = '', fc = '', done = false, aSteps = []
@@ -223,7 +257,7 @@ function App() {
       }
       setMessages(prev => { const u = [...prev]; const l = u[u.length - 1]; if (l.role === 'assistant' && l.streaming) u[u.length - 1] = { ...l, streaming: false }; return u })
       const first = messages.filter(m => m.role === 'user').length === 0
-      if (first && um.length > 0) { const t = um.slice(0, 20) + (um.length > 20 ? '…' : ''); await fetch(`${API}/api/sessions/${activeSessionId}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title: t }) }); refreshSessionList() }
+      if (first && um.length > 0) { const t = um.slice(0, 20) + (um.length > 20 ? '…' : ''); await apiFetch(`${API}/api/sessions/${activeSessionId}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title: t }) }); refreshSessionList() }
     } catch { setMessages(prev => { const u = [...prev]; u[u.length - 1] = { role: 'assistant', content: '抱歉，请求失败了，请重试。', streaming: false, steps: [] }; return u }) }
     setLoading(false)
   }
@@ -232,6 +266,30 @@ function App() {
   const mn = modelList.find(m => m.id === selectedModel)?.name || selectedModel
 
   return (
+    <>
+      {!authenticated ? (
+        <div className="login-screen">
+          <div className="login-card">
+            <div className="login-icon"><AIIcon size={48} /></div>
+            <h2 className="login-title">AI Chat</h2>
+            <p className="login-desc">请输入访问密码</p>
+            <input
+              className="login-input"
+              type="password"
+              value={loginInput}
+              onChange={e => { setLoginInput(e.target.value); setLoginError('') }}
+              onKeyDown={e => { if (e.key === 'Enter') handleLogin() }}
+              placeholder="输入密码..."
+              autoFocus
+              disabled={loginLoading}
+            />
+            {loginError && <p className="login-error">{loginError}</p>}
+            <button className="login-btn" onClick={handleLogin} disabled={loginLoading || !loginInput.trim()}>
+              {loginLoading ? '验证中...' : '登录'}
+            </button>
+          </div>
+        </div>
+      ) : (
     <div className="chat-app">
       {sidebarOpen && <div className="sidebar-overlay" onClick={() => setSidebarOpen(false)} />}
       <aside className={`sidebar${sidebarOpen ? ' open' : ''}`}>
@@ -445,6 +503,8 @@ function App() {
         </div>
       )}
    </div>
+      )}
+    </>
   )
 }
 export default App

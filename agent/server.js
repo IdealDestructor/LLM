@@ -35,6 +35,37 @@ function json(res, data, status = 200) {
   res.end(JSON.stringify(data));
 }
 
+// ─── 访问鉴权 ───────────────────────────────────────────────
+function authenticate(req, res) {
+  const auth = req.headers['authorization'] || '';
+  if (!auth.startsWith('Bearer ')) {
+    json(res, { error: 'Unauthorized' }, 401);
+    return false;
+  }
+  const token = auth.slice(7);
+  if (token !== config.accessPassword) {
+    json(res, { error: 'Invalid password' }, 401);
+    return false;
+  }
+  return true;
+}
+
+// POST /api/auth/verify — 验证访问密码
+function handleAuthVerify(req, res) {
+  readBody(req).then(body => {
+    try {
+      const { password } = JSON.parse(body);
+      if (password === config.accessPassword) {
+        json(res, { success: true });
+      } else {
+        json(res, { success: false, error: '密码错误' }, 401);
+      }
+    } catch (e) {
+      json(res, { error: 'Invalid request' }, 400);
+    }
+  }).catch(e => json(res, { error: e.message }, 500));
+}
+
 function resolveModelOptions(body) {
   const model = body.model || config.defaultModel;
   const modelConfig = config.models.find(m => m.id === model);
@@ -541,11 +572,17 @@ function parseUrl(req) {
 function handleRequest(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, DELETE, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
   if (req.method === 'OPTIONS') { res.writeHead(200); res.end(); return; }
 
   const { pathname } = parseUrl(req);
   const method = req.method;
+
+  // ─── 公开路由（无需鉴权） ─────────────────────────────────
+  if (method === 'POST' && pathname === '/api/auth/verify') { handleAuthVerify(req, res); return; }
+
+  // ─── API 路由鉴权 ─────────────────────────────────────────
+  if (pathname.startsWith('/api/') && !authenticate(req, res)) return;
 
   if (method === 'GET' && pathname === '/api/models') { handleModels(req, res); return; }
   if (method === 'GET' && pathname === '/api/tools') { handleTools(req, res); return; }
